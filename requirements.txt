@@ -1,0 +1,25 @@
+# BootForge Requirements
+# Core dependencies
+click>=8.0.0
+colorama>=0.4.6
+cryptography>=45.0.0
+pillow>=11.0.0
+psutil>=7.0.0
+pyyaml>=6.0.2
+requests>=2.32.0
+
+# GUI dependencies (optional)
+PyQt6>=6.9.0
+
+# Development and packaging
+pyinstaller>=6.15.0
+
+# Optional system tools integration
+# Note: These are system packages, install separately
+# Linux: badblocks, e2fsprogs, dosfstools, ntfs-3g
+# macOS: diskutil (built-in)
+# Windows: format (built-in)
+
+# Optional mobile device support
+# libimobiledevice (system package)
+# checkra1n (external tool)

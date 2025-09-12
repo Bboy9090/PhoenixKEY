@@ -23,6 +23,7 @@ from src.core.usb_builder import (
     BuildProgress, DeploymentType, PartitionScheme, FileSystem
 )
 from src.core.disk_manager import DiskInfo
+from src.core.safety_validator import SafetyValidator, SafetyLevel, ValidationResult
 
 
 class RecipeSelectionWidget(QWidget):
@@ -518,6 +519,7 @@ class USBRecipeManagerWidget(QWidget):
         self.logger = logging.getLogger(__name__)
         self.usb_builder = USBBuilderEngine()
         self.disk_manager = disk_manager
+        self.safety_validator = SafetyValidator(SafetyLevel.STANDARD)
         
         # Current selections
         self.selected_recipe: Optional[str] = None
@@ -787,25 +789,97 @@ class USBRecipeManagerWidget(QWidget):
         self.build_btn.setEnabled(ready)
     
     def _start_build(self):
-        """Start USB build process"""
+        """Start USB build process with comprehensive safety validation"""
         try:
             # Validate selections
             if not all([self.selected_recipe, self.selected_device, self.selected_profile]):
                 QMessageBox.warning(self, "Missing Selection", "Please complete all selections before building.")
                 return
+            
+            self.progress_widget.add_log_message("INFO", "Starting comprehensive safety validation...")
+            
+            # CRITICAL: Comprehensive Device Safety Validation (matching CLI)
+            device_risk = self.safety_validator.validate_device_safety(self.selected_device)
+            
+            if device_risk.overall_risk == ValidationResult.BLOCKED:
+                QMessageBox.critical(
+                    self, "🚫 OPERATION BLOCKED FOR SAFETY 🚫",
+                    f"Device: {self.selected_device}\n"
+                    f"Size: {device_risk.size_gb:.1f}GB\n\n"
+                    f"Risk Factors:\n" + "\n".join([f"• {factor}" for factor in device_risk.risk_factors]) + 
+                    f"\n\nThis device is not safe to use for USB creation."
+                )
+                self.progress_widget.add_log_message("ERROR", f"BLOCKED device: {self.selected_device}")
+                return
+            
+            if device_risk.overall_risk == ValidationResult.DANGEROUS:
+                QMessageBox.critical(
+                    self, "⚠️ DANGEROUS DEVICE DETECTED ⚠️",
+                    f"Device: {self.selected_device} ({device_risk.size_gb:.1f}GB)\n\n"
+                    f"Risk Factors:\n" + "\n".join([f"• {factor}" for factor in device_risk.risk_factors]) + 
+                    f"\n\nThis operation could destroy important data.\n\n"
+                    f"OPERATION BLOCKED FOR SAFETY"
+                )
+                self.progress_widget.add_log_message("ERROR", f"DANGEROUS device blocked: {self.selected_device}")
+                return
+            
+            # Validate prerequisites
+            prereq_checks = self.safety_validator.validate_prerequisites()
+            blocked_checks = [check for check in prereq_checks if check.result == ValidationResult.BLOCKED]
+            if blocked_checks:
+                error_msg = "❌ MISSING PREREQUISITES:\n" + "\n".join([f"• {check.name}: {check.message}" for check in blocked_checks])
+                QMessageBox.critical(self, "Missing Prerequisites", error_msg)
+                for check in blocked_checks:
+                    self.progress_widget.add_log_message("ERROR", f"Missing prerequisite: {check.name}")
+                return
+            
+            # Validate source files
+            source_checks = self.safety_validator.validate_source_files(self.source_files)
+            blocked_sources = [check for check in source_checks if check.result == ValidationResult.BLOCKED]
+            if blocked_sources:
+                error_msg = "❌ SOURCE FILE ISSUES:\n" + "\n".join([f"• {check.name}: {check.message}" for check in blocked_sources])
+                QMessageBox.critical(self, "Source File Issues", error_msg)
+                for check in blocked_sources:
+                    self.progress_widget.add_log_message("ERROR", f"Source file issue: {check.name}")
+                return
+            
+            self.progress_widget.add_log_message("INFO", "✅ All safety validations passed")
+            
+            # Handle WARNING devices with typed confirmation (matching CLI)
+            if device_risk.overall_risk == ValidationResult.WARNING:
+                warning_msg = (
+                    f"⚠️ WARNING: Device has risk factors\n\n"
+                    f"Device: {self.selected_device} ({device_risk.size_gb:.1f}GB)\n\n"
+                    f"Risk Factors:\n" + "\n".join([f"• {factor}" for factor in device_risk.risk_factors]) + 
+                    f"\n\nThis operation will PERMANENTLY ERASE all data.\n\n"
+                    f"To confirm, type the device name: {os.path.basename(self.selected_device)}"
+                )
                 
-            # Confirmation dialog
-            reply = QMessageBox.question(
-                self, "Confirm Build",
-                f"This will erase all data on {self.selected_device}.\n\n"
+                text, ok = QInputDialog.getText(self, "⚠️ Confirm Risky Operation", warning_msg)
+                if not ok or text != os.path.basename(self.selected_device):
+                    self.progress_widget.add_log_message("INFO", "Operation cancelled - failed device name confirmation")
+                    return
+            
+            # Final comprehensive confirmation dialog
+            device_basename = os.path.basename(self.selected_device)
+            final_confirmation = (
+                f"🚨 FINAL WARNING - POINT OF NO RETURN 🚨\n\n"
+                f"This will PERMANENTLY ERASE ALL DATA on:\n"
+                f"Device: {self.selected_device}\n"
+                f"Size: {device_risk.size_gb:.1f} GB\n\n"
                 f"Recipe: {self.selected_recipe}\n"
                 f"Hardware: {self.selected_profile}\n\n"
-                "Are you sure you want to continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                f"⚠️ This action CANNOT BE UNDONE ⚠️\n\n"
+                f"To proceed, type EXACTLY: {device_basename}"
             )
             
-            if reply != QMessageBox.StandardButton.Yes:
+            from PyQt6.QtWidgets import QInputDialog
+            text, ok = QInputDialog.getText(self, "🚨 Final Confirmation Required", final_confirmation)
+            if not ok or text != device_basename:
+                self.progress_widget.add_log_message("INFO", "Operation cancelled - failed final confirmation")
                 return
+            
+            self.progress_widget.add_log_message("INFO", f"User confirmed operation on {self.selected_device}")
             
             # Setup progress monitoring
             builder = self.usb_builder.create_deployment_usb(
@@ -824,10 +898,12 @@ class USBRecipeManagerWidget(QWidget):
             self.build_btn.setEnabled(False)
             self.cancel_btn.setEnabled(True)
             
-            self.logger.info("Started USB build process")
+            self.progress_widget.add_log_message("INFO", "✅ Starting USB build process with all safety checks passed")
+            self.logger.info("Started USB build process with comprehensive safety validation")
             
         except Exception as e:
             self.logger.error(f"Error starting build: {e}")
+            self.progress_widget.add_log_message("ERROR", f"Build start error: {str(e)}")
             QMessageBox.critical(self, "Build Error", f"Failed to start build: {str(e)}")
     
     def _cancel_build(self):

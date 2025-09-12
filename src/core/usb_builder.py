@@ -20,6 +20,7 @@ from dataclasses import dataclass, asdict, field
 from PyQt6.QtCore import QThread, pyqtSignal, QObject
 
 from src.core.disk_manager import DiskManager, DiskInfo, WriteProgress
+from src.core.safety_validator import SafetyValidator, SafetyLevel, ValidationResult, DeviceRisk
 
 
 class PartitionScheme(Enum):
@@ -210,9 +211,10 @@ class USBBuilder(QThread):
     operation_started = pyqtSignal(str)
     log_message = pyqtSignal(str, str)  # level, message
     
-    def __init__(self):
+    def __init__(self, safety_level: SafetyLevel = SafetyLevel.STANDARD):
         super().__init__()
         self.logger = logging.getLogger(__name__)
+        self.safety_validator = SafetyValidator(safety_level)
         self.recipe: Optional[DeploymentRecipe] = None
         self.target_device: str = ""
         self.hardware_profile: Optional[HardwareProfile] = None
@@ -220,6 +222,7 @@ class USBBuilder(QThread):
         self.is_cancelled = False
         self.build_log: List[str] = []
         self.temp_dir: Optional[Path] = None
+        self.rollback_operations: List[Callable] = []  # For rollback on failure
     
     def start_build(self, recipe: DeploymentRecipe, target_device: str, 
                    hardware_profile: HardwareProfile, source_files: Dict[str, str]):
@@ -295,6 +298,7 @@ class USBBuilder(QThread):
             if not self._finalize_build(partition_mounts):
                 return
             
+            self._build_successful = True
             self._log_message("INFO", "USB build completed successfully")
             self.operation_completed.emit(True, "USB build completed successfully")
             
@@ -304,42 +308,99 @@ class USBBuilder(QThread):
             self.operation_completed.emit(False, f"Build error: {str(e)}")
         
         finally:
+            # Perform rollback if needed
+            if self.is_cancelled or not hasattr(self, '_build_successful'):
+                self._perform_rollback()
             # Cleanup
             self._cleanup_build()
     
     def _validate_build_inputs(self) -> bool:
-        """Validate build inputs"""
+        """Comprehensive safety validation of build inputs"""
         try:
+            self._log_message("INFO", "Starting comprehensive safety validation...")
+            
             # Check recipe
             if not self.recipe:
                 self.operation_completed.emit(False, "No recipe specified")
                 return False
             
-            # Check target device
-            if not os.path.exists(self.target_device):
-                self.operation_completed.emit(False, f"Target device not found: {self.target_device}")
+            # 1. CRITICAL: Device Safety Validation
+            self._log_message("INFO", "Validating target device safety...")
+            device_risk = self.safety_validator.validate_device_safety(self.target_device)
+            
+            if device_risk.overall_risk == ValidationResult.BLOCKED:
+                error_msg = (
+                    f"🚫 OPERATION BLOCKED FOR SAFETY 🚫\n"
+                    f"Device: {self.target_device}\n"
+                    f"Risk Factors: {', '.join(device_risk.risk_factors)}\n"
+                    f"This device is not safe to use for USB creation."
+                )
+                self._log_message("ERROR", error_msg)
+                self.operation_completed.emit(False, error_msg)
                 return False
             
-            # Check required files
-            for required_file in self.recipe.required_files:
-                if required_file not in self.source_files:
-                    self.operation_completed.emit(False, f"Required file missing: {required_file}")
-                    return False
-                
-                if not os.path.exists(self.source_files[required_file]):
-                    self.operation_completed.emit(False, f"Source file not found: {self.source_files[required_file]}")
-                    return False
+            if device_risk.overall_risk == ValidationResult.DANGEROUS:
+                error_msg = (
+                    f"⚠️ DANGEROUS DEVICE DETECTED ⚠️\n"
+                    f"Device: {self.target_device} ({device_risk.size_gb:.1f}GB)\n"
+                    f"Risk Factors: {', '.join(device_risk.risk_factors)}\n"
+                    f"This operation could destroy important data."
+                )
+                self._log_message("ERROR", error_msg)
+                self.operation_completed.emit(False, error_msg)
+                return False
             
-            # Check hardware profile compatibility
+            # Log device validation results
+            self._log_message("INFO", f"Device validation: {device_risk.overall_risk.value}")
+            self._log_message("INFO", f"Device size: {device_risk.size_gb:.1f}GB")
+            self._log_message("INFO", f"Removable: {device_risk.is_removable}")
+            self._log_message("INFO", f"System disk: {device_risk.is_system_disk}")
+            
+            # 2. Prerequisites Validation
+            self._log_message("INFO", "Validating system prerequisites...")
+            prereq_checks = self.safety_validator.validate_prerequisites()
+            
+            blocked_checks = [check for check in prereq_checks if check.result == ValidationResult.BLOCKED]
+            if blocked_checks:
+                error_msg = "❌ MISSING PREREQUISITES:\n" + "\n".join(
+                    f"• {check.name}: {check.message}" for check in blocked_checks
+                )
+                self._log_message("ERROR", error_msg)
+                self.operation_completed.emit(False, error_msg)
+                return False
+            
+            # 3. Source Files Validation
+            self._log_message("INFO", "Validating source files...")
+            source_checks = self.safety_validator.validate_source_files(self.source_files)
+            
+            blocked_sources = [check for check in source_checks if check.result == ValidationResult.BLOCKED]
+            if blocked_sources:
+                error_msg = "❌ SOURCE FILE ISSUES:\n" + "\n".join(
+                    f"• {check.name}: {check.message}" for check in blocked_sources
+                )
+                self._log_message("ERROR", error_msg)
+                self.operation_completed.emit(False, error_msg)
+                return False
+            
+            # 4. Hardware Profile Compatibility
             if (self.hardware_profile and 
                 self.hardware_profile.model not in self.recipe.hardware_profiles and 
                 "generic" not in self.recipe.hardware_profiles):
                 self._log_message("WARNING", f"Hardware profile {self.hardware_profile.model} not officially supported for this recipe")
             
+            # 5. Final Safety Summary
+            self._log_message("INFO", "✅ All safety validations passed")
+            self._log_message("INFO", f"Target: {self.target_device} ({device_risk.size_gb:.1f}GB)")
+            self._log_message("INFO", f"Recipe: {self.recipe.name}")
+            self._log_message("INFO", f"Files: {len(self.source_files)} source files validated")
+            
             return True
             
         except Exception as e:
-            self.operation_completed.emit(False, f"Validation error: {str(e)}")
+            error_msg = f"Critical validation error: {str(e)}"
+            self.logger.error(error_msg)
+            self._log_message("ERROR", error_msg)
+            self.operation_completed.emit(False, error_msg)
             return False
     
     def _prepare_target_device(self) -> bool:
@@ -582,6 +643,15 @@ class USBBuilder(QThread):
                         'sudo', 'mount', partition_device, str(mount_point)
                     ], capture_output=True, text=True)
                     
+                    # Add rollback operation for unmounting
+                    if result.returncode == 0:
+                        self._add_rollback_operation(
+                            lambda mp=str(mount_point): subprocess.run(
+                                ['sudo', 'umount', mp], 
+                                capture_output=True, check=False
+                            )
+                        )
+                    
                     if result.returncode != 0:
                         self._log_message("ERROR", f"Failed to mount {partition_device}: {result.stderr}")
                         continue
@@ -803,6 +873,42 @@ class USBBuilder(QThread):
                 
         except Exception as e:
             self._log_message("WARNING", f"Error during cleanup: {e}")
+    
+    def _perform_rollback(self):
+        """Perform rollback operations if build fails or is cancelled"""
+        try:
+            self._log_message("INFO", "Performing rollback operations...")
+            
+            # Execute rollback operations in reverse order
+            for rollback_op in reversed(self.rollback_operations):
+                try:
+                    rollback_op()
+                except Exception as e:
+                    self._log_message("WARNING", f"Rollback operation failed: {e}")
+            
+            # Unmount any mounted partitions
+            self._unmount_device_partitions()
+            
+            # Clear partition table if we created one
+            if self.target_device and hasattr(self, '_partition_table_created'):
+                try:
+                    if platform.system() == "Linux":
+                        subprocess.run(
+                            ['sudo', 'wipefs', '-a', self.target_device],
+                            capture_output=True, text=True, check=False
+                        )
+                    self._log_message("INFO", "Restored device to original state")
+                except Exception as e:
+                    self._log_message("WARNING", f"Could not fully restore device: {e}")
+            
+            self._log_message("INFO", "Rollback completed")
+            
+        except Exception as e:
+            self._log_message("ERROR", f"Error during rollback: {e}")
+    
+    def _add_rollback_operation(self, operation: Callable):
+        """Add an operation to the rollback list"""
+        self.rollback_operations.append(operation)
     
     def _emit_progress(self, step_name: str, step_num: int, total_steps: int, step_progress: float):
         """Emit progress update signal"""

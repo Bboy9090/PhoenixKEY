@@ -29,6 +29,7 @@ from src.core.config import Config
 from src.core.logger import setup_logging
 from src.core.disk_manager import DiskManager
 from src.core.system_monitor import SystemMonitor
+from src.core.safety_validator import SafetyValidator, SafetyLevel, ValidationResult
 from src.plugins.plugin_manager import PluginManager
 
 
@@ -46,6 +47,7 @@ def cli(ctx, verbose, config):
     ctx.ensure_object(dict)
     ctx.obj['config'] = Config(config)
     ctx.obj['disk_manager'] = DiskManager()
+    ctx.obj['safety_validator'] = SafetyValidator(SafetyLevel.STANDARD)
     ctx.obj['plugin_manager'] = PluginManager(ctx.obj['config'])
     
     # Professional banner
@@ -106,44 +108,70 @@ def list_devices(ctx):
 @click.option('--dry-run', is_flag=True, help='Show what would be done without actually doing it')
 @click.pass_context
 def write_image(ctx, image, device, verify, force, dry_run):
-    """Write OS image to USB device"""
+    """Write OS image to USB device with comprehensive safety validation"""
+    safety_validator = ctx.obj['safety_validator']
     disk_manager = ctx.obj['disk_manager']
     
-    # Validate image file
+    click.echo(f"{Fore.BLUE}🔍 Starting comprehensive safety validation...{Style.RESET_ALL}")
+    
+    # CRITICAL: Comprehensive Device Safety Validation
+    device_risk = safety_validator.validate_device_safety(device)
+    
+    if device_risk.overall_risk == ValidationResult.BLOCKED:
+        click.echo(f"{Fore.RED}{Style.BRIGHT}🚫 OPERATION BLOCKED FOR SAFETY 🚫{Style.RESET_ALL}")
+        click.echo(f"{Fore.RED}Device: {device}{Style.RESET_ALL}")
+        click.echo(f"{Fore.RED}Size: {device_risk.size_gb:.1f}GB{Style.RESET_ALL}")
+        click.echo(f"{Fore.RED}Risk Factors:{Style.RESET_ALL}")
+        for factor in device_risk.risk_factors:
+            click.echo(f"{Fore.RED}  • {factor}{Style.RESET_ALL}")
+        click.echo(f"{Fore.RED}This device is not safe to use for USB creation.{Style.RESET_ALL}")
+        sys.exit(1)
+    
+    if device_risk.overall_risk == ValidationResult.DANGEROUS:
+        click.echo(f"{Fore.RED}{Style.BRIGHT}⚠️ DANGEROUS DEVICE DETECTED ⚠️{Style.RESET_ALL}")
+        click.echo(f"{Fore.RED}Device: {device} ({device_risk.size_gb:.1f}GB){Style.RESET_ALL}")
+        click.echo(f"{Fore.RED}Risk Factors:{Style.RESET_ALL}")
+        for factor in device_risk.risk_factors:
+            click.echo(f"{Fore.RED}  • {factor}{Style.RESET_ALL}")
+        click.echo(f"{Fore.RED}This operation could destroy important data.{Style.RESET_ALL}")
+        sys.exit(1)
+    
+    # Validate prerequisites
+    prereq_checks = safety_validator.validate_prerequisites()
+    blocked_checks = [check for check in prereq_checks if check.result == ValidationResult.BLOCKED]
+    if blocked_checks:
+        click.echo(f"{Fore.RED}❌ MISSING PREREQUISITES:{Style.RESET_ALL}")
+        for check in blocked_checks:
+            click.echo(f"{Fore.RED}  • {check.name}: {check.message}{Style.RESET_ALL}")
+        sys.exit(1)
+    
+    # Validate source files
+    source_files = {'image': image}
+    source_checks = safety_validator.validate_source_files(source_files)
+    blocked_sources = [check for check in source_checks if check.result == ValidationResult.BLOCKED]
+    if blocked_sources:
+        click.echo(f"{Fore.RED}❌ SOURCE FILE ISSUES:{Style.RESET_ALL}")
+        for check in blocked_sources:
+            click.echo(f"{Fore.RED}  • {check.name}: {check.message}{Style.RESET_ALL}")
+        sys.exit(1)
+    
+    click.echo(f"{Fore.GREEN}✅ All safety validations passed{Style.RESET_ALL}")
+    
+    # Get image info for summary
     image_path = Path(image)
-    if not image_path.exists():
-        click.echo(f"Error: Image file not found: {image}", err=True)
-        sys.exit(1)
-    
-    # Validate device
-    device_path = Path(device)
-    if not device_path.exists():
-        click.echo(f"Error: Device not found: {device}", err=True)
-        sys.exit(1)
-    
-    # Get device info
-    devices = disk_manager.get_removable_drives()
-    target_device = None
-    for dev in devices:
-        if dev.path == device:
-            target_device = dev
-            break
-    
-    if not target_device:
-        click.echo(f"Error: {device} is not a removable USB device", err=True)
-        sys.exit(1)
-    
-    # Show detailed operation summary
     size_mb = image_path.stat().st_size / (1024 * 1024)
-    device_size_gb = target_device.size_bytes / (1024**3)
+    
+    # Show detailed operation summary  
+    device_size_gb = device_risk.size_gb
     
     click.echo(f"{Fore.CYAN}{'═' * 60}{Style.RESET_ALL}")
     click.echo(f"{Fore.YELLOW}{Style.BRIGHT}📋 OPERATION SUMMARY{Style.RESET_ALL}")
     click.echo(f"{Fore.CYAN}{'═' * 60}{Style.RESET_ALL}")
     click.echo(f"  📁 Image File: {Fore.WHITE}{image_path.name}{Style.RESET_ALL} ({size_mb:.1f} MB)")
     click.echo(f"  🗂️  Full Path: {Fore.WHITE}{image_path}{Style.RESET_ALL}")
-    click.echo(f"  🎯 Target Device: {Fore.WHITE}{target_device.name}{Style.RESET_ALL} ({device_size_gb:.1f} GB)")
-    click.echo(f"  🏭 Device Model: {Fore.WHITE}{target_device.vendor} {target_device.model}{Style.RESET_ALL}")
+    click.echo(f"  🎯 Target Device: {Fore.WHITE}{device}{Style.RESET_ALL} ({device_size_gb:.1f} GB)")
+    click.echo(f"  🛡️ Device Safety: {Fore.WHITE}{device_risk.overall_risk.value.upper()}{Style.RESET_ALL}")
+    click.echo(f"  📱 Removable: {Fore.WHITE}{'Yes' if device_risk.is_removable else 'No'}{Style.RESET_ALL}")
     click.echo(f"  📍 Device Path: {Fore.WHITE}{device}{Style.RESET_ALL}")
     click.echo(f"  ✅ Verification: {Fore.WHITE}{'Enabled' if verify else 'Disabled'}{Style.RESET_ALL}")
     if dry_run:

@@ -16,15 +16,15 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "BootForge"
+args = "BootForge GUI"
 
 [[workflows.workflow]]
-name = "BootForge"
+name = "BootForge GUI"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python main.py"
+args = "python main.py --gui"
 
 [workflows.workflow.metadata]
 outputType = "console"

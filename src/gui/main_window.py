@@ -22,6 +22,7 @@ from src.core.disk_manager import DiskManager
 from src.gui.wizard_widget import BootForgeWizard
 from src.gui.status_widget import StatusWidget
 from src.gui.log_viewer import LogViewer
+from src.gui.usb_recipe_manager import USBRecipeManagerWidget
 
 
 class BootForgeMainWindow(QMainWindow):
@@ -97,9 +98,18 @@ class BootForgeMainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         
-        # Create wizard widget
+        # Create tab widget for different interfaces
+        interface_tabs = QTabWidget()
+        
+        # USB Builder tab (new enhanced interface)
+        self.usb_recipe_manager = USBRecipeManagerWidget(self.disk_manager)
+        interface_tabs.addTab(self.usb_recipe_manager, "USB Builder")
+        
+        # Original wizard tab (for compatibility)
         self.wizard = BootForgeWizard(self.disk_manager)
-        layout.addWidget(self.wizard)
+        interface_tabs.addTab(self.wizard, "Classic Wizard")
+        
+        layout.addWidget(interface_tabs)
         
         return panel
     

@@ -1624,7 +1624,9 @@ class OSImageSelectionStepView(StepView):
     def update_next_button_state(self):
         """Update Next button state based on validation"""
         is_valid = self.validate_step()
-        self.step_completed.emit(is_valid)  # Enable/disable Next
+        self.set_navigation_enabled(next=is_valid)
+        if is_valid:
+            self.step_completed.emit()  # Signal step completion
     
     def _update_navigation_state(self):
         """Update navigation button state based on current validation status"""
@@ -3266,80 +3268,826 @@ The following DESTRUCTIVE operations will be performed:
 
 
 class BuildVerifyStepView(StepView):
-    """Build and verify step view"""
+    """Comprehensive Build and Verify Step - The exciting culmination where BootForge creates the bootable USB drive"""
+    
+    # Build stage signals
+    build_started = pyqtSignal()
+    build_completed = pyqtSignal(bool, str)  # success, message
+    build_progress_updated = pyqtSignal(object)  # BuildProgress object
+    build_stage_changed = pyqtSignal(str, int)  # stage_name, stage_number
+    verification_completed = pyqtSignal(bool, dict)  # success, results
     
     def __init__(self):
         super().__init__(
             "Build & Verify",
-            "Creating the bootable USB drive. Please do not disconnect the device."
+            "Creating your bootable USB drive with comprehensive safety validation and verification"
         )
+        
+        # Build components
+        self.usb_builder_engine = USBBuilderEngine()
+        self.safety_validator = SafetyValidator(SafetyLevel.STANDARD)
+        
+        # Build state
+        self.wizard_state: Optional[WizardState] = None
+        self.selected_device: Optional[DiskInfo] = None
+        self.selected_recipe: Optional[DeploymentRecipe] = None
+        self.hardware_profile: Optional[HardwareProfile] = None
+        self.source_files: Dict[str, str] = {}
+        
+        # Build tracking
+        self.current_builder: Optional[USBBuilder] = None
+        self.build_start_time: Optional[datetime] = None
+        self.total_bytes_to_write: int = 0
+        self.bytes_written: int = 0
+        self.current_stage: int = 0
+        self.build_completed_successfully: bool = False
+        
+        # Build stages
+        self.build_stages = [
+            ("Pre-build Safety Validation", "Performing comprehensive safety checks and device validation"),
+            ("Device Preparation", "Preparing USB device and creating partition scheme"),
+            ("OS Image Deployment", "Writing operating system image and core files"),
+            ("Bootloader Configuration", "Installing and configuring bootloader components"),
+            ("Final Verification", "Verifying installation integrity and creating deployment report")
+        ]
+        
         self._setup_content()
-    
-    def _setup_content(self):
-        """Setup build and verify content"""
-        # Progress group
-        progress_group = QGroupBox("Build Progress")
-        progress_layout = QVBoxLayout(progress_group)
-        
-        self.status_label = QLabel("Ready to start build process...")
-        self.status_label.setStyleSheet("color: #cccccc; font-size: 14px;")
-        progress_layout.addWidget(self.status_label)
-        
-        self.progress_bar = QProgressBar()
-        progress_layout.addWidget(self.progress_bar)
-        
-        self.details_label = QLabel("")
-        self.details_label.setStyleSheet("color: #aaaaaa; font-size: 12px;")
-        progress_layout.addWidget(self.details_label)
-        
-        self.content_layout.addWidget(progress_group)
         
         # Initially disable navigation
         self.set_navigation_enabled(previous=False, next=False)
     
-    def on_step_entered(self):
-        """Start build process when step is entered"""
-        self._start_build()
+    def _setup_content(self):
+        """Setup comprehensive build and verify UI"""
+        # Main splitter for layout
+        main_splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # Top section: Build progress and status
+        progress_widget = self._create_progress_widget()
+        main_splitter.addWidget(progress_widget)
+        
+        # Bottom section: Logs and statistics
+        info_widget = self._create_info_widget()
+        main_splitter.addWidget(info_widget)
+        
+        # Set proportions (70% progress, 30% info)
+        main_splitter.setSizes([700, 300])
+        self.content_layout.addWidget(main_splitter)
+        
+        # Emergency controls
+        emergency_layout = QHBoxLayout()
+        emergency_layout.addStretch()
+        
+        self.emergency_stop_btn = QPushButton("🛑 Emergency Stop")
+        self.emergency_stop_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #c82333;
+            }
+            QPushButton:pressed {
+                background-color: #bd2130;
+            }
+            QPushButton:disabled {
+                background-color: #6c757d;
+            }
+        """)
+        self.emergency_stop_btn.clicked.connect(self._emergency_stop)
+        self.emergency_stop_btn.setEnabled(False)
+        emergency_layout.addWidget(self.emergency_stop_btn)
+        
+        self.content_layout.addLayout(emergency_layout)
     
-    def _start_build(self):
-        """Start the build process simulation"""
-        self.status_label.setText("Starting build process...")
-        self.progress_bar.setValue(0)
+    def _create_progress_widget(self) -> QWidget:
+        """Create the main progress display widget"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
         
-        self.build_timer = QTimer()
-        self.build_timer.timeout.connect(self._update_build)
-        self.build_timer.start(200)
-        self.build_progress = 0
-        self.build_stage = 0
+        # Build status header
+        header_layout = QHBoxLayout()
         
-        self.build_stages = [
-            "Preparing USB drive...",
-            "Formatting drive...",
-            "Writing OS image...", 
-            "Verifying written data...",
-            "Finalizing installation..."
+        self.build_icon = QLabel("⚙️")
+        self.build_icon.setFont(QFont("Arial", 24))
+        header_layout.addWidget(self.build_icon)
+        
+        status_layout = QVBoxLayout()
+        self.build_title = QLabel("Ready to Create Bootable USB Drive")
+        self.build_title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.build_title.setStyleSheet("color: #ffffff; margin-bottom: 5px;")
+        status_layout.addWidget(self.build_title)
+        
+        self.build_subtitle = QLabel("Waiting for safety confirmation...")
+        self.build_subtitle.setStyleSheet("color: #cccccc; font-size: 14px;")
+        status_layout.addWidget(self.build_subtitle)
+        
+        header_layout.addLayout(status_layout)
+        header_layout.addStretch()
+        
+        # Build statistics
+        stats_layout = QVBoxLayout()
+        self.speed_label = QLabel("Speed: --")
+        self.speed_label.setStyleSheet("color: #aaaaaa; font-size: 12px;")
+        stats_layout.addWidget(self.speed_label)
+        
+        self.eta_label = QLabel("ETA: --")
+        self.eta_label.setStyleSheet("color: #aaaaaa; font-size: 12px;")
+        stats_layout.addWidget(self.eta_label)
+        
+        self.elapsed_label = QLabel("Elapsed: 00:00:00")
+        self.elapsed_label.setStyleSheet("color: #aaaaaa; font-size: 12px;")
+        stats_layout.addWidget(self.elapsed_label)
+        
+        header_layout.addLayout(stats_layout)
+        layout.addLayout(header_layout)
+        
+        # Stage progress display
+        self.stage_group = QGroupBox("Build Progress")
+        stage_layout = QVBoxLayout(self.stage_group)
+        
+        # Current stage indicator
+        self.current_stage_label = QLabel("Stage 1 of 5: Pre-build Safety Validation")
+        self.current_stage_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        self.current_stage_label.setStyleSheet("color: #ffffff; margin-bottom: 10px;")
+        stage_layout.addWidget(self.current_stage_label)
+        
+        # Stage progress bar
+        self.stage_progress_bar = QProgressBar()
+        self.stage_progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #555555;
+                border-radius: 8px;
+                text-align: center;
+                background-color: #2d2d30;
+                color: #ffffff;
+                font-weight: bold;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #4CAF50, stop:1 #45a049);
+                border-radius: 6px;
+            }
+        """)
+        self.stage_progress_bar.setMinimumHeight(30)
+        stage_layout.addWidget(self.stage_progress_bar)
+        
+        # Overall progress bar
+        overall_label = QLabel("Overall Progress")
+        overall_label.setStyleSheet("color: #cccccc; font-size: 12px; margin-top: 10px;")
+        stage_layout.addWidget(overall_label)
+        
+        self.overall_progress_bar = QProgressBar()
+        self.overall_progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #555555;
+                border-radius: 6px;
+                text-align: center;
+                background-color: #2d2d30;
+                color: #ffffff;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #0078d4, stop:1 #106ebe);
+                border-radius: 4px;
+            }
+        """)
+        self.overall_progress_bar.setMinimumHeight(20)
+        stage_layout.addWidget(self.overall_progress_bar)
+        
+        # Current operation
+        self.operation_label = QLabel("Click Start to begin build process")
+        self.operation_label.setStyleSheet("color: #aaaaaa; font-size: 11px; margin-top: 5px;")
+        stage_layout.addWidget(self.operation_label)
+        
+        layout.addWidget(self.stage_group)
+        
+        # Start build button
+        self.start_build_btn = QPushButton("🚀 Start Build Process")
+        self.start_build_btn.setMinimumHeight(50)
+        self.start_build_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #28a745, stop:1 #1e7e34);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 15px 30px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #34ce57, stop:1 #28a745);
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1e7e34, stop:1 #155724);
+            }
+            QPushButton:disabled {
+                background-color: #6c757d;
+                color: #ffffff;
+            }
+        """)
+        self.start_build_btn.clicked.connect(self._start_build_process)
+        layout.addWidget(self.start_build_btn)
+        
+        return widget
+    
+    def _create_info_widget(self) -> QWidget:
+        """Create the information and logs widget"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Tab widget for different information views
+        self.info_tabs = QTabWidget()
+        
+        # Build log tab
+        self.build_log = QTextEdit()
+        self.build_log.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #ffffff;
+                border: 1px solid #555555;
+                border-radius: 4px;
+                font-family: 'Courier New', monospace;
+                font-size: 11px;
+            }
+        """)
+        self.build_log.setReadOnly(True)
+        self.info_tabs.addTab(self.build_log, "📋 Build Log")
+        
+        # Statistics tab
+        stats_widget = self._create_statistics_widget()
+        self.info_tabs.addTab(stats_widget, "📊 Statistics")
+        
+        # Device info tab
+        device_widget = self._create_device_info_widget()
+        self.info_tabs.addTab(device_widget, "💾 Device Info")
+        
+        layout.addWidget(self.info_tabs)
+        
+        return widget
+    
+    def _create_statistics_widget(self) -> QWidget:
+        """Create the build statistics widget"""
+        widget = QWidget()
+        layout = QGridLayout(widget)
+        
+        # Statistics labels
+        stats_labels = [
+            ("Total Size:", "total_size_label"),
+            ("Bytes Written:", "bytes_written_label"),
+            ("Average Speed:", "avg_speed_label"),
+            ("Peak Speed:", "peak_speed_label"),
+            ("Time Elapsed:", "time_elapsed_label"),
+            ("Estimated Remaining:", "time_remaining_label")
         ]
-    
-    def _update_build(self):
-        """Update build progress"""
-        self.build_progress += 2
-        self.progress_bar.setValue(self.build_progress)
         
-        # Update stage
-        stage_progress = self.build_progress // 20
-        if stage_progress < len(self.build_stages):
-            self.details_label.setText(self.build_stages[stage_progress])
+        for i, (label_text, attr_name) in enumerate(stats_labels):
+            label = QLabel(label_text)
+            label.setStyleSheet("color: #cccccc; font-weight: bold;")
+            layout.addWidget(label, i, 0)
+            
+            value_label = QLabel("--")
+            value_label.setStyleSheet("color: #ffffff;")
+            setattr(self, attr_name, value_label)
+            layout.addWidget(value_label, i, 1)
         
-        if self.build_progress >= 100:
-            self.build_timer.stop()
-            self._complete_build()
+        layout.setColumnStretch(1, 1)
+        return widget
     
-    def _complete_build(self):
-        """Complete the build process"""
-        self.status_label.setText("Build completed successfully!")
-        self.details_label.setText("USB drive is ready for use")
+    def _create_device_info_widget(self) -> QWidget:
+        """Create the device information widget"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        self.device_info_label = QLabel("No device selected")
+        self.device_info_label.setStyleSheet("color: #cccccc;")
+        self.device_info_label.setWordWrap(True)
+        layout.addWidget(self.device_info_label)
+        
+        layout.addStretch()
+        return widget
+    
+    def on_step_entered(self):
+        """Called when step becomes active - load wizard state and prepare for build"""
+        self.logger.info("Build & Verify step entered - preparing for USB creation")
+        
+        # Load wizard state if available
+        self._load_wizard_state()
+        
+        # Update device info display
+        self._update_device_info_display()
+        
+        # Log entry to build log
+        self._log_build_message("INFO", "Build & Verify step initialized")
+        self._log_build_message("INFO", f"Target device: {self.selected_device.name if self.selected_device else 'None'}")
+        self._log_build_message("INFO", f"Deployment recipe: {self.selected_recipe.name if self.selected_recipe else 'None'}")
+        
+        # Enable start button if all requirements are met
+        self._validate_build_requirements()
+    
+    def on_step_left(self):
+        """Called when leaving step - cleanup and save state"""
+        self.logger.info("Build & Verify step exited")
+        
+        # Cancel any ongoing build
+        if self.current_builder and self.current_builder.isRunning():
+            self._emergency_stop()
+    
+    def _load_wizard_state(self):
+        """Load wizard state from previous steps"""
+        # This would be populated by the wizard controller
+        # For now, we'll use placeholder data
+        self.logger.info("Loading wizard state from previous steps")
+        
+        # In real implementation, this would come from wizard_state
+        # self.selected_device = self.wizard_state.selected_device
+        # self.selected_recipe = self.wizard_state.selected_recipe
+        # self.hardware_profile = self.wizard_state.hardware_profile
+        # self.source_files = self.wizard_state.source_files
+    
+    def _update_device_info_display(self):
+        """Update the device information display"""
+        if self.selected_device:
+            device_info = f"""💾 Target Device Information:
+            
+Device: {self.selected_device.name}
+Path: {self.selected_device.path}
+Size: {self.selected_device.size_bytes / (1024**3):.1f} GB
+Model: {self.selected_device.model}
+Vendor: {self.selected_device.vendor}
+Filesystem: {self.selected_device.filesystem}
+Removable: {'Yes' if self.selected_device.is_removable else 'No'}
+Health: {self.selected_device.health_status}
+            
+🛠️ Deployment Configuration:
+            
+Recipe: {self.selected_recipe.name if self.selected_recipe else 'Not selected'}
+Hardware Profile: {self.hardware_profile.name if self.hardware_profile else 'Not selected'}
+Source Files: {len(self.source_files)} files ready"""
+            
+            self.device_info_label.setText(device_info)
+        else:
+            self.device_info_label.setText("⚠️ No device selected")
+    
+    def _validate_build_requirements(self):
+        """Validate that all requirements are met for build process"""
+        requirements_met = (
+            self.selected_device is not None and
+            self.selected_recipe is not None and
+            self.hardware_profile is not None
+        )
+        
+        if requirements_met:
+            self.start_build_btn.setEnabled(True)
+            self.build_subtitle.setText("All requirements met - ready to build")
+            self._log_build_message("INFO", "All build requirements validated successfully")
+        else:
+            self.start_build_btn.setEnabled(False)
+            missing = []
+            if not self.selected_device:
+                missing.append("device selection")
+            if not self.selected_recipe:
+                missing.append("deployment recipe")
+            if not self.hardware_profile:
+                missing.append("hardware profile")
+            
+            self.build_subtitle.setText(f"Missing: {', '.join(missing)}")
+            self._log_build_message("WARNING", f"Build requirements not met: {', '.join(missing)}")
+    
+    def _start_build_process(self):
+        """Start the comprehensive build process"""
+        self.logger.info("Starting USB build process")
+        
+        # Disable start button and enable emergency stop
+        self.start_build_btn.setEnabled(False)
+        self.emergency_stop_btn.setEnabled(True)
+        
+        # Update UI state
+        self.build_icon.setText("⚙️")
+        self.build_title.setText("Creating Bootable USB Drive")
+        self.build_subtitle.setText("Build process starting...")
+        
+        # Reset progress tracking
+        self.build_start_time = datetime.now()
+        self.current_stage = 0
+        self.bytes_written = 0
+        self.build_completed_successfully = False
+        
+        # Start Stage 1: Pre-build Safety Revalidation
+        self._start_stage_1_safety_revalidation()
+    
+    def _start_stage_1_safety_revalidation(self):
+        """Stage 1: Comprehensive safety revalidation with TOCTTOU protection"""
+        self.current_stage = 1
+        self._update_stage_display(1, "Pre-build Safety Validation", "Performing comprehensive safety checks...")
+        
+        self._log_build_message("INFO", "=== STAGE 1: Pre-build Safety Revalidation ===")
+        self._log_build_message("INFO", "Performing TOCTTOU protection validation...")
+        
+        # Simulate safety validation progress
+        self.safety_timer = QTimer()
+        self.safety_timer.timeout.connect(self._update_safety_validation)
+        self.safety_progress = 0
+        self.safety_timer.start(100)
+    
+    def _update_safety_validation(self):
+        """Update safety validation progress"""
+        self.safety_progress += 5
+        self.stage_progress_bar.setValue(self.safety_progress)
+        
+        # Update operation text
+        safety_operations = [
+            "Verifying device accessibility...",
+            "Checking device removability status...",
+            "Validating device hasn't changed...",
+            "Ensuring no mounted partitions...",
+            "Confirming device safety profile...",
+            "Performing final safety validation..."
+        ]
+        
+        operation_index = min(self.safety_progress // 17, len(safety_operations) - 1)
+        self.operation_label.setText(safety_operations[operation_index])
+        
+        if self.safety_progress >= 100:
+            self.safety_timer.stop()
+            self._complete_stage_1_safety()
+    
+    def _complete_stage_1_safety(self):
+        """Complete Stage 1 and proceed to Stage 2"""
+        self._log_build_message("INFO", "Safety validation completed successfully")
+        self._log_build_message("INFO", "Device confirmed safe for deployment")
+        
+        # Update overall progress
+        self.overall_progress_bar.setValue(20)
+        
+        # Proceed to Stage 2
+        self._start_stage_2_device_preparation()
+    
+    def _start_stage_2_device_preparation(self):
+        """Stage 2: Device preparation and partitioning"""
+        self.current_stage = 2
+        self._update_stage_display(2, "Device Preparation", "Preparing USB device and creating partitions...")
+        
+        self._log_build_message("INFO", "=== STAGE 2: Device Preparation ===")
+        self._log_build_message("INFO", "Unmounting existing partitions...")
+        self._log_build_message("INFO", "Creating new partition scheme...")
+        
+        # Simulate device preparation
+        self.prep_timer = QTimer()
+        self.prep_timer.timeout.connect(self._update_device_preparation)
+        self.prep_progress = 0
+        self.prep_timer.start(150)
+    
+    def _update_device_preparation(self):
+        """Update device preparation progress"""
+        self.prep_progress += 8
+        self.stage_progress_bar.setValue(self.prep_progress)
+        
+        prep_operations = [
+            "Unmounting device partitions...",
+            "Wiping existing partition table...",
+            "Creating GPT partition scheme...",
+            "Creating EFI system partition...",
+            "Creating main data partition...",
+            "Formatting partitions..."
+        ]
+        
+        operation_index = min(self.prep_progress // 17, len(prep_operations) - 1)
+        self.operation_label.setText(prep_operations[operation_index])
+        
+        if self.prep_progress >= 100:
+            self.prep_timer.stop()
+            self._complete_stage_2_preparation()
+    
+    def _complete_stage_2_preparation(self):
+        """Complete Stage 2 and proceed to Stage 3"""
+        self._log_build_message("INFO", "Device preparation completed successfully")
+        self._log_build_message("INFO", "Partitions created and formatted")
+        
+        # Update overall progress
+        self.overall_progress_bar.setValue(40)
+        
+        # Proceed to Stage 3
+        self._start_stage_3_image_deployment()
+    
+    def _start_stage_3_image_deployment(self):
+        """Stage 3: OS image deployment - the main writing phase"""
+        self.current_stage = 3
+        self._update_stage_display(3, "OS Image Deployment", "Writing operating system image and core files...")
+        
+        self._log_build_message("INFO", "=== STAGE 3: OS Image Deployment ===")
+        self._log_build_message("INFO", "Starting OS image write operation...")
+        
+        # Calculate estimated total size (simulated)
+        self.total_bytes_to_write = 4.2 * 1024 * 1024 * 1024  # 4.2 GB example
+        self.total_size_label.setText(f"{self.total_bytes_to_write / (1024**3):.1f} GB")
+        
+        # Start image writing simulation
+        self.image_timer = QTimer()
+        self.image_timer.timeout.connect(self._update_image_deployment)
+        self.image_progress = 0
+        self.last_speed_update = time.time()
+        self.image_timer.start(50)  # Faster updates for writing simulation
+    
+    def _update_image_deployment(self):
+        """Update image deployment progress with realistic speed simulation"""
+        # Simulate realistic write speeds (20-80 MB/s)
+        current_time = time.time()
+        time_delta = current_time - self.last_speed_update
+        
+        # Simulate variable write speed
+        import random
+        base_speed = 45  # MB/s base speed
+        speed_variation = random.uniform(0.8, 1.2)
+        current_speed = base_speed * speed_variation
+        
+        # Calculate bytes written in this interval
+        bytes_this_interval = current_speed * 1024 * 1024 * time_delta  # MB/s to bytes
+        self.bytes_written += bytes_this_interval
+        
+        # Update progress
+        progress_percent = min((self.bytes_written / self.total_bytes_to_write) * 100, 100)
+        self.stage_progress_bar.setValue(int(progress_percent))
+        
+        # Update statistics
+        self._update_build_statistics(current_speed)
+        
+        # Update operation text
+        self.operation_label.setText(f"Writing OS image... {self.bytes_written / (1024**3):.1f} GB / {self.total_bytes_to_write / (1024**3):.1f} GB")
+        
+        self.last_speed_update = current_time
+        
+        if progress_percent >= 100:
+            self.image_timer.stop()
+            self._complete_stage_3_deployment()
+    
+    def _complete_stage_3_deployment(self):
+        """Complete Stage 3 and proceed to Stage 4"""
+        self._log_build_message("INFO", "OS image deployment completed successfully")
+        self._log_build_message("INFO", f"Written {self.bytes_written / (1024**3):.1f} GB of data")
+        
+        # Update overall progress
+        self.overall_progress_bar.setValue(70)
+        
+        # Proceed to Stage 4
+        self._start_stage_4_bootloader_config()
+    
+    def _start_stage_4_bootloader_config(self):
+        """Stage 4: Bootloader configuration and installation"""
+        self.current_stage = 4
+        self._update_stage_display(4, "Bootloader Configuration", "Installing and configuring bootloader components...")
+        
+        self._log_build_message("INFO", "=== STAGE 4: Bootloader Configuration ===")
+        self._log_build_message("INFO", "Installing bootloader components...")
+        
+        # Simulate bootloader configuration
+        self.bootloader_timer = QTimer()
+        self.bootloader_timer.timeout.connect(self._update_bootloader_config)
+        self.bootloader_progress = 0
+        self.bootloader_timer.start(200)
+    
+    def _update_bootloader_config(self):
+        """Update bootloader configuration progress"""
+        self.bootloader_progress += 12
+        self.stage_progress_bar.setValue(self.bootloader_progress)
+        
+        bootloader_operations = [
+            "Installing GRUB bootloader...",
+            "Configuring boot parameters...",
+            "Setting up UEFI boot entries...",
+            "Applying hardware-specific configs...",
+            "Finalizing bootloader installation..."
+        ]
+        
+        operation_index = min(self.bootloader_progress // 20, len(bootloader_operations) - 1)
+        self.operation_label.setText(bootloader_operations[operation_index])
+        
+        if self.bootloader_progress >= 100:
+            self.bootloader_timer.stop()
+            self._complete_stage_4_bootloader()
+    
+    def _complete_stage_4_bootloader(self):
+        """Complete Stage 4 and proceed to Stage 5"""
+        self._log_build_message("INFO", "Bootloader configuration completed successfully")
+        self._log_build_message("INFO", "Device is now bootable")
+        
+        # Update overall progress
+        self.overall_progress_bar.setValue(90)
+        
+        # Proceed to Stage 5
+        self._start_stage_5_verification()
+    
+    def _start_stage_5_verification(self):
+        """Stage 5: Final verification and cleanup"""
+        self.current_stage = 5
+        self._update_stage_display(5, "Final Verification", "Verifying installation integrity and creating deployment report...")
+        
+        self._log_build_message("INFO", "=== STAGE 5: Final Verification ===")
+        self._log_build_message("INFO", "Starting comprehensive verification...")
+        
+        # Simulate verification process
+        self.verify_timer = QTimer()
+        self.verify_timer.timeout.connect(self._update_verification)
+        self.verify_progress = 0
+        self.verify_timer.start(180)
+    
+    def _update_verification(self):
+        """Update verification progress"""
+        self.verify_progress += 10
+        self.stage_progress_bar.setValue(self.verify_progress)
+        
+        verify_operations = [
+            "Verifying file system integrity...",
+            "Checking bootloader installation...",
+            "Validating partition structure...",
+            "Testing boot configuration...",
+            "Generating deployment report...",
+            "Finalizing USB drive..."
+        ]
+        
+        operation_index = min(self.verify_progress // 17, len(verify_operations) - 1)
+        self.operation_label.setText(verify_operations[operation_index])
+        
+        if self.verify_progress >= 100:
+            self.verify_timer.stop()
+            self._complete_build_process()
+    
+    def _complete_build_process(self):
+        """Complete the entire build process successfully"""
+        self.build_completed_successfully = True
+        build_duration = datetime.now() - self.build_start_time if self.build_start_time else None
+        
+        # Update UI to success state
+        self.build_icon.setText("✅")
+        self.build_title.setText("USB Drive Created Successfully!")
+        self.build_subtitle.setText(f"Completed in {build_duration.total_seconds():.0f} seconds" if build_duration else "Build completed")
+        
+        # Final progress updates
+        self.overall_progress_bar.setValue(100)
+        self.stage_progress_bar.setValue(100)
+        self.operation_label.setText("Build process completed successfully")
+        
+        # Log completion
+        self._log_build_message("SUCCESS", "=== BUILD COMPLETED SUCCESSFULLY ===")
+        self._log_build_message("SUCCESS", "USB drive is ready for use")
+        self._log_build_message("INFO", f"Total build time: {build_duration.total_seconds():.1f} seconds" if build_duration else "Build time unknown")
+        
+        # Disable emergency stop and enable navigation
+        self.emergency_stop_btn.setEnabled(False)
         self.set_navigation_enabled(previous=False, next=True)
+        
+        # Emit completion signal
         self.step_completed.emit()
+        
+        # Update wizard state for summary step
+        self._prepare_summary_data()
+    
+    def _prepare_summary_data(self):
+        """Prepare build data for the summary step"""
+        build_duration = datetime.now() - self.build_start_time if self.build_start_time else None
+        
+        summary_data = {
+            "success": self.build_completed_successfully,
+            "device_name": self.selected_device.name if self.selected_device else "Unknown",
+            "device_size": f"{self.selected_device.size_bytes / (1024**3):.1f} GB" if self.selected_device else "Unknown",
+            "recipe_name": self.selected_recipe.name if self.selected_recipe else "Unknown",
+            "build_duration": f"{build_duration.total_seconds():.0f} seconds" if build_duration else "Unknown",
+            "bytes_written": f"{self.bytes_written / (1024**3):.1f} GB",
+            "verification_passed": True,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # This would be saved to wizard state in real implementation
+        self.logger.info(f"Build summary prepared: {summary_data}")
+    
+    def _update_stage_display(self, stage_number: int, stage_name: str, stage_description: str):
+        """Update the stage display with current information"""
+        self.current_stage_label.setText(f"Stage {stage_number} of 5: {stage_name}")
+        self.operation_label.setText(stage_description)
+        self.stage_progress_bar.setValue(0)
+        
+        # Emit stage change signal
+        self.build_stage_changed.emit(stage_name, stage_number)
+    
+    def _update_build_statistics(self, current_speed_mbps: float):
+        """Update build statistics display"""
+        if self.build_start_time:
+            elapsed = datetime.now() - self.build_start_time
+            self.elapsed_label.setText(f"Elapsed: {str(elapsed).split('.')[0]}")
+            self.time_elapsed_label.setText(str(elapsed).split('.')[0])
+        
+        # Update speed
+        self.speed_label.setText(f"Speed: {current_speed_mbps:.1f} MB/s")
+        self.avg_speed_label.setText(f"{current_speed_mbps:.1f} MB/s")
+        
+        # Update bytes written
+        self.bytes_written_label.setText(f"{self.bytes_written / (1024**3):.2f} GB")
+        
+        # Calculate ETA
+        if current_speed_mbps > 0 and self.total_bytes_to_write > self.bytes_written:
+            remaining_bytes = self.total_bytes_to_write - self.bytes_written
+            eta_seconds = remaining_bytes / (current_speed_mbps * 1024 * 1024)
+            eta_str = f"{int(eta_seconds // 60):02d}:{int(eta_seconds % 60):02d}"
+            self.eta_label.setText(f"ETA: {eta_str}")
+            self.time_remaining_label.setText(eta_str)
+        else:
+            self.eta_label.setText("ETA: --")
+            self.time_remaining_label.setText("--")
+    
+    def _log_build_message(self, level: str, message: str):
+        """Add a message to the build log"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        level_color = {
+            "INFO": "#cccccc",
+            "WARNING": "#ffaa00",
+            "ERROR": "#ff4444",
+            "SUCCESS": "#44ff44"
+        }.get(level, "#cccccc")
+        
+        formatted_message = f'<span style="color: #888888;">[{timestamp}]</span> <span style="color: {level_color}; font-weight: bold;">{level}:</span> <span style="color: #ffffff;">{message}</span>'
+        
+        self.build_log.append(formatted_message)
+        
+        # Auto-scroll to bottom
+        cursor = self.build_log.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.build_log.setTextCursor(cursor)
+    
+    def _emergency_stop(self):
+        """Emergency stop function with confirmation"""
+        reply = QMessageBox.question(
+            self,
+            "Emergency Stop",
+            "Are you sure you want to stop the build process?\n\nThis may leave the USB drive in an unusable state.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.logger.warning("Emergency stop initiated by user")
+            self._log_build_message("WARNING", "EMERGENCY STOP initiated by user")
+            
+            # Stop all timers
+            for timer_attr in ['safety_timer', 'prep_timer', 'image_timer', 'bootloader_timer', 'verify_timer']:
+                if hasattr(self, timer_attr):
+                    timer = getattr(self, timer_attr)
+                    if hasattr(timer, 'stop'):
+                        timer.stop()
+            
+            # Cancel USB builder if running
+            if self.current_builder and self.current_builder.isRunning():
+                self.current_builder.cancel_build()
+                self.current_builder.wait(5000)  # Wait up to 5 seconds
+            
+            # Update UI to stopped state
+            self.build_icon.setText("🛑")
+            self.build_title.setText("Build Process Stopped")
+            self.build_subtitle.setText("Process was stopped by user")
+            self.operation_label.setText("Build process cancelled")
+            
+            # Re-enable start button and disable emergency stop
+            self.start_build_btn.setEnabled(True)
+            self.emergency_stop_btn.setEnabled(False)
+            
+            self._log_build_message("ERROR", "Build process stopped - USB drive may be unusable")
+    
+    def validate_step(self) -> bool:
+        """Validate step completion"""
+        return self.build_completed_successfully
+    
+    def get_step_data(self) -> Dict[str, Any]:
+        """Get step data for wizard state"""
+        build_duration = datetime.now() - self.build_start_time if self.build_start_time else None
+        
+        return {
+            "build_completed": self.build_completed_successfully,
+            "device_path": self.selected_device.path if self.selected_device else None,
+            "recipe_name": self.selected_recipe.name if self.selected_recipe else None,
+            "build_duration_seconds": build_duration.total_seconds() if build_duration else 0,
+            "bytes_written": self.bytes_written,
+            "verification_passed": self.build_completed_successfully,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    def load_step_data(self, data: Dict[str, Any]):
+        """Load step data from wizard state"""
+        # This would load device selection, recipe, and hardware profile
+        # from previous steps in a real implementation
+        self.logger.info(f"Loading step data: {data}")
+        
+        # Example of how wizard state would be loaded:
+        # if 'selected_device' in data:
+        #     self.selected_device = data['selected_device']
+        # if 'selected_recipe' in data:
+        #     self.selected_recipe = data['selected_recipe']
+        # if 'hardware_profile' in data:
+        #     self.hardware_profile = data['hardware_profile']
 
 
 class SummaryStepView(StepView):

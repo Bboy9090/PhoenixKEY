@@ -47,8 +47,12 @@ outputType = "webview"
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["python3", "web_server.py"]
+run = ["python3", "main.py"]
 
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 46851
+externalPort = 3000

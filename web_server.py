@@ -277,6 +277,16 @@ def health():
     """Health check endpoint"""
     return jsonify({"status": "healthy", "app": "BootForge Web Demo"})
 
+@app.route('/api')
+def api():
+    """API endpoint for health checks"""
+    return jsonify({"status": "ok", "message": "BootForge Web API is running"})
+
+@app.route('/api/health')
+def api_health():
+    """Alternative health check"""
+    return jsonify({"status": "healthy", "service": "BootForge"})
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)

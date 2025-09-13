@@ -14,6 +14,21 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 def main():
     """Main application entry point"""
+    # Check if we're in a cloud deployment environment (no display, cloud env vars)
+    if (os.environ.get('PORT') or 
+        not os.environ.get('DISPLAY') and not sys.argv[1:] and 
+        not os.environ.get('XDG_SESSION_TYPE')):
+        # We're likely in a cloud deployment - start web server
+        try:
+            from web_server import app
+            port = int(os.environ.get('PORT', 5000))
+            print(f"🌐 Starting BootForge web server on port {port}...")
+            app.run(host='0.0.0.0', port=port, debug=False)
+            return
+        except Exception as e:
+            print(f"⚠️ Could not start web server: {e}")
+            # Fall through to CLI mode
+    
     # Check if GUI is requested and available (robust position detection)
     gui_requested = "--gui" in sys.argv
     if gui_requested:

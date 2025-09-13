@@ -30,4 +30,5 @@ args = "python main.py --gui"
 outputType = "console"
 
 [deployment]
-deploymentTarget = "cloudrun"
+deploymentTarget = "autoscale"
+run = ["python", "main.py", "--gui"]

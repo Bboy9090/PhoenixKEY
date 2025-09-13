@@ -23,6 +23,8 @@ from PyQt6.QtGui import QFont, QPixmap, QIcon, QColor
 
 from src.gui.stepper_header import StepperHeader, StepState
 from src.gui.stepper_wizard import WizardController, WizardStep, WizardState
+from src.gui.modern_theme import BootForgeTheme
+from src.gui.icon_manager import IconManager
 from src.core.disk_manager import DiskManager, DiskInfo, WriteProgress
 from src.core.hardware_detector import HardwareDetector, DetectedHardware, DetectionConfidence
 from src.core.hardware_matcher import HardwareMatcher, ProfileMatch
@@ -47,26 +49,49 @@ class StepView(QWidget):
         self.step_title = step_title
         self.step_description = step_description
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        
+        # Initialize icon manager for step-specific icons
+        self.icon_manager = IconManager()
+        
         self._setup_ui()
     
     def _setup_ui(self):
-        """Setup the step view UI"""
+        """Setup the step view UI with modern theme styling"""
         layout = QVBoxLayout(self)
-        layout.setSpacing(20)
-        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(BootForgeTheme.SPACING['lg'])
+        layout.setContentsMargins(
+            BootForgeTheme.SPACING['2xl'], 
+            BootForgeTheme.SPACING['2xl'], 
+            BootForgeTheme.SPACING['2xl'], 
+            BootForgeTheme.SPACING['2xl']
+        )
         
-        # Step title and description
+        # Step title and description with modern styling
         title_label = QLabel(self.step_title)
-        title_font = QFont()
-        title_font.setPointSize(18)
-        title_font.setBold(True)
+        title_font = QFont(
+            BootForgeTheme.FONTS['default_family'], 
+            BootForgeTheme.FONTS['sizes']['2xl'], 
+            QFont.Weight.Bold
+        )
         title_label.setFont(title_font)
-        title_label.setStyleSheet("color: #ffffff; margin-bottom: 10px;")
+        title_label.setStyleSheet(f"""
+            color: {BootForgeTheme.COLORS['text_primary']};
+            margin-bottom: {BootForgeTheme.SPACING['base']}px;
+        """)
         layout.addWidget(title_label)
         
         desc_label = QLabel(self.step_description)
         desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("color: #cccccc; font-size: 14px; margin-bottom: 20px;")
+        desc_font = QFont(
+            BootForgeTheme.FONTS['default_family'], 
+            BootForgeTheme.FONTS['sizes']['base']
+        )
+        desc_label.setFont(desc_font)
+        desc_label.setStyleSheet(f"""
+            color: {BootForgeTheme.COLORS['text_secondary']};
+            margin-bottom: {BootForgeTheme.SPACING['lg']}px;
+            line-height: 1.5;
+        """)
         layout.addWidget(desc_label)
         
         # Content area for subclasses to customize
@@ -75,35 +100,84 @@ class StepView(QWidget):
         self.content_layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.content_widget)
         
-        # Navigation buttons area
+        # Navigation buttons area with modern styling
         nav_layout = QHBoxLayout()
-        nav_layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
+        nav_layout.addSpacerItem(QSpacerItem(
+            BootForgeTheme.SPACING['xl'], 
+            BootForgeTheme.SPACING['base'], 
+            QSizePolicy.Policy.Expanding, 
+            QSizePolicy.Policy.Minimum
+        ))
         
-        self.previous_button = QPushButton("Previous")
-        self.previous_button.setMinimumSize(100, 35)
+        # Previous button with secondary styling
+        self.previous_button = QPushButton("← Previous")
+        self.previous_button.setMinimumSize(120, 40)
+        prev_font = QFont(
+            BootForgeTheme.FONTS['default_family'], 
+            BootForgeTheme.FONTS['sizes']['base'], 
+            QFont.Weight.Medium
+        )
+        self.previous_button.setFont(prev_font)
+        self.previous_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BootForgeTheme.COLORS['bg_tertiary']};
+                color: {BootForgeTheme.COLORS['text_primary']};
+                border: 1px solid {BootForgeTheme.COLORS['border']};
+                border-radius: {BootForgeTheme.RADIUS['base']}px;
+                padding: {BootForgeTheme.SPACING['sm']}px {BootForgeTheme.SPACING['lg']}px;
+            }}
+            QPushButton:hover {{
+                background-color: {BootForgeTheme.COLORS['surface_hover']};
+                border-color: {BootForgeTheme.COLORS['border_light']};
+            }}
+            QPushButton:pressed {{
+                background-color: {BootForgeTheme.COLORS['surface_pressed']};
+            }}
+            QPushButton:disabled {{
+                background-color: {BootForgeTheme.COLORS['bg_input']};
+                color: {BootForgeTheme.COLORS['text_disabled']};
+                border-color: {BootForgeTheme.COLORS['border']};
+            }}
+        """)
         self.previous_button.clicked.connect(self.request_previous_step)
         nav_layout.addWidget(self.previous_button)
         
-        self.next_button = QPushButton("Next")
-        self.next_button.setMinimumSize(100, 35)
-        self.next_button.setStyleSheet("""
-            QPushButton {
-                background-color: #0078d4;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #106ebe;
-            }
-            QPushButton:pressed {
-                background-color: #005a9e;
-            }
-            QPushButton:disabled {
-                background-color: #4a4a4a;
-                color: #888888;
-            }
+        # Spacing between buttons
+        nav_layout.addSpacerItem(QSpacerItem(
+            BootForgeTheme.SPACING['base'], 
+            BootForgeTheme.SPACING['base']
+        ))
+        
+        # Next button with primary styling
+        self.next_button = QPushButton("Next →")
+        self.next_button.setMinimumSize(120, 40)
+        next_font = QFont(
+            BootForgeTheme.FONTS['default_family'], 
+            BootForgeTheme.FONTS['sizes']['base'], 
+            QFont.Weight.Medium
+        )
+        self.next_button.setFont(next_font)
+        self.next_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BootForgeTheme.COLORS['primary']};
+                color: {BootForgeTheme.COLORS['text_primary']};
+                border: 1px solid {BootForgeTheme.COLORS['primary']};
+                border-radius: {BootForgeTheme.RADIUS['base']}px;
+                padding: {BootForgeTheme.SPACING['sm']}px {BootForgeTheme.SPACING['lg']}px;
+            }}
+            QPushButton:hover {{
+                background-color: {BootForgeTheme.COLORS['primary_hover']};
+                border-color: {BootForgeTheme.COLORS['primary_hover']};
+            }}
+            QPushButton:pressed {{
+                background-color: {BootForgeTheme.COLORS['primary_pressed']};
+                border-color: {BootForgeTheme.COLORS['primary_pressed']};
+            }}
+            QPushButton:disabled {{
+                background-color: {BootForgeTheme.COLORS['text_disabled']};
+                color: {BootForgeTheme.COLORS['text_muted']};
+                border-color: {BootForgeTheme.COLORS['border']};
+            }}
         """)
         self.next_button.clicked.connect(self._on_next_clicked)
         nav_layout.addWidget(self.next_button)
@@ -111,7 +185,20 @@ class StepView(QWidget):
         layout.addLayout(nav_layout)
         
         # Add spacer to push content up
-        layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
+        layout.addSpacerItem(QSpacerItem(
+            BootForgeTheme.SPACING['base'], 
+            BootForgeTheme.SPACING['xl'], 
+            QSizePolicy.Policy.Minimum, 
+            QSizePolicy.Policy.Expanding
+        ))
+        
+        # Apply overall step view styling
+        self.setStyleSheet(f"""
+            StepView {{
+                background-color: {BootForgeTheme.COLORS['bg_primary']};
+                border-radius: {BootForgeTheme.RADIUS['lg']}px;
+            }}
+        """)
     
     def set_navigation_enabled(self, previous: bool = True, next: bool = True):
         """Enable/disable navigation buttons"""

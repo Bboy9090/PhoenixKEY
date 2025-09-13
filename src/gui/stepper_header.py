@@ -10,10 +10,14 @@ from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, 
     QFrame, QSizePolicy, QGraphicsDropShadowEffect
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QRect, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QRect, QTimer, pyqtSlot
+# pyqtProperty import - LSP server may show false positive, but works at runtime
+from PyQt6.QtCore import pyqtProperty  # type: ignore
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPixmap, QPalette, QIcon
 
 from src.gui.stepper_wizard import WizardStep, WizardController
+from src.gui.modern_theme import BootForgeTheme
+from src.gui.icon_manager import IconManager
 
 
 class StepState(Enum):
@@ -37,56 +41,92 @@ class StepIndicator(QWidget):
         self.state = StepState.LOCKED
         self._clickable = False
         
-        # Styling constants
-        self.CIRCLE_SIZE = 40
-        self.LINE_WIDTH = 3
-        self.LINE_LENGTH = 80
+        # Initialize icon manager
+        self.icon_manager = IconManager()
         
-        # Colors for different states
+        # Styling constants - increased sizes for better visibility
+        self.CIRCLE_SIZE = 48
+        self.LINE_WIDTH = 4
+        self.LINE_LENGTH = 100
+        
+        # Step icons mapping
+        self.step_icons = {
+            0: "device",    # Detect Hardware
+            1: "image",     # Select OS Image
+            2: "settings",  # Configure USB
+            3: "warning",   # Safety Review
+            4: "verify",    # Build & Verify
+            5: "success"    # Summary
+        }
+        
+        # Colors using modern theme
         self.colors = {
             StepState.LOCKED: {
-                'circle': '#4a4a4a',
-                'text': '#888888',
-                'line': '#333333'
+                'circle': BootForgeTheme.COLORS['text_disabled'],
+                'text': BootForgeTheme.COLORS['text_disabled'],
+                'line': BootForgeTheme.COLORS['border']
             },
             StepState.ACTIVE: {
-                'circle': '#0078d4',
-                'text': '#ffffff',
-                'line': '#0078d4'
+                'circle': BootForgeTheme.COLORS['primary'],
+                'text': BootForgeTheme.COLORS['text_primary'],
+                'line': BootForgeTheme.COLORS['primary']
             },
             StepState.COMPLETE: {
-                'circle': '#107c10',
-                'text': '#ffffff', 
-                'line': '#107c10'
+                'circle': BootForgeTheme.COLORS['success'],
+                'text': BootForgeTheme.COLORS['text_primary'], 
+                'line': BootForgeTheme.COLORS['success']
             },
             StepState.ERROR: {
-                'circle': '#d13438',
-                'text': '#ffffff',
-                'line': '#d13438'
+                'circle': BootForgeTheme.COLORS['error'],
+                'text': BootForgeTheme.COLORS['text_primary'],
+                'line': BootForgeTheme.COLORS['error']
             }
         }
         
-        self.setFixedSize(self.LINE_LENGTH + self.CIRCLE_SIZE if not is_last else self.CIRCLE_SIZE, 80)
+        self.setFixedSize(self.LINE_LENGTH + self.CIRCLE_SIZE if not is_last else self.CIRCLE_SIZE, 100)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         
-        # Add subtle shadow effect
+        # Enhanced shadow effect
         shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(8)
-        shadow.setColor(QColor(0, 0, 0, 50))
-        shadow.setOffset(0, 2)
+        shadow.setBlurRadius(12)
+        shadow.setColor(QColor(0, 0, 0, 80))
+        shadow.setOffset(0, 3)
         self.setGraphicsEffect(shadow)
+        
+        # Animation properties for smooth transitions
+        self._scale_factor = 1.0
+        self._opacity = 1.0
+        
+        # Scale animation for hover effects
+        self._scale_animation = QPropertyAnimation(self, b"scaleFactor")
+        self._scale_animation.setDuration(200)
+        self._scale_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        
+        # Opacity animation for state transitions
+        self._opacity_animation = QPropertyAnimation(self, b"opacityValue")
+        self._opacity_animation.setDuration(300)
+        self._opacity_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        
+        # Timer for pulse animation on active state
+        self._pulse_timer = QTimer()
+        self._pulse_timer.timeout.connect(self._pulse_active_step)
+        self._pulse_direction = 1
         
         self.logger = logging.getLogger(f"{__name__}.StepIndicator")
     
     def set_state(self, state: StepState, clickable: bool = False):
-        """Update step visual state and clickability"""
+        """Update step visual state and clickability with smooth animations"""
         state_changed = (self.state != state)
         clickable_changed = (self._clickable != clickable)
         
         if state_changed or clickable_changed:
             if state_changed:
+                old_state = self.state
                 self.state = state
-                self.logger.debug(f"Step {self.step_index} state changed to {state.name}")
+                self.logger.debug(f"Step {self.step_index} state changed from {old_state.name} to {state.name}")
+                
+                # Animate state transition
+                self._animate_state_change(old_state, state)
             
             if clickable_changed:
                 self._clickable = clickable
@@ -111,7 +151,7 @@ class StepIndicator(QWidget):
         super().mousePressEvent(a0)
     
     def paintEvent(self, a0):
-        """Custom paint method for step visualization"""
+        """Custom paint method for step visualization with modern styling"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
@@ -121,65 +161,201 @@ class StepIndicator(QWidget):
         text_color = QColor(color_scheme['text'])
         line_color = QColor(color_scheme['line'])
         
-        # Draw connecting line (if not last step)
+        # Draw enhanced connecting line (if not last step)
         if not self.is_last:
-            line_y = self.height() // 2
-            line_start_x = self.CIRCLE_SIZE + 5
-            line_end_x = self.width() - 5
+            line_y = self.height() // 2 - 10  # Adjusted for new circle position
+            line_start_x = self.CIRCLE_SIZE + 8
+            line_end_x = self.width() - 8
             
-            pen = QPen(line_color, self.LINE_WIDTH)
-            painter.setPen(pen)
+            # Draw background line
+            bg_pen = QPen(QColor(BootForgeTheme.COLORS['border']), self.LINE_WIDTH - 1)
+            painter.setPen(bg_pen)
             painter.drawLine(line_start_x, line_y, line_end_x, line_y)
+            
+            # Draw progress line for completed/active steps
+            if self.state in [StepState.COMPLETE, StepState.ACTIVE]:
+                progress_pen = QPen(line_color, self.LINE_WIDTH)
+                progress_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(progress_pen)
+                
+                # Calculate progress length
+                progress_length = line_end_x - line_start_x
+                if self.state == StepState.COMPLETE:
+                    progress_end = line_end_x
+                else:  # ACTIVE
+                    progress_end = line_start_x + (progress_length * 0.5)  # 50% for active
+                
+                painter.drawLine(line_start_x, line_y, int(progress_end), line_y)
         
-        # Draw step circle
-        circle_x = 0
-        circle_y = (self.height() - self.CIRCLE_SIZE) // 2
-        circle_rect = QRect(circle_x, circle_y, self.CIRCLE_SIZE, self.CIRCLE_SIZE)
+        # Apply scale factor for animations
+        scaled_size = int(self.CIRCLE_SIZE * self._scale_factor)
+        size_diff = scaled_size - self.CIRCLE_SIZE
         
-        # Add hover effect for clickable steps
+        # Draw step circle with enhanced styling and animation support
+        circle_x = -size_diff // 2
+        circle_y = (self.height() - scaled_size) // 2 - 10
+        circle_rect = QRect(circle_x, circle_y, scaled_size, scaled_size)
+        
+        # Apply opacity for animations
+        painter.setOpacity(self._opacity)
+        
+        # Enhanced hover effect for clickable steps
         if self.is_clickable() and self.underMouse():
-            # Draw slightly larger circle for hover effect
-            hover_rect = QRect(circle_x - 2, circle_y - 2, self.CIRCLE_SIZE + 4, self.CIRCLE_SIZE + 4)
-            painter.setBrush(QBrush(circle_color.lighter(120)))
-            painter.setPen(QPen(circle_color.lighter(140), 2))
-            painter.drawEllipse(hover_rect)
+            # Draw glow effect
+            glow_rect = QRect(circle_x - 4, circle_y - 4, self.CIRCLE_SIZE + 8, self.CIRCLE_SIZE + 8)
+            glow_color = QColor(circle_color)
+            glow_color.setAlpha(60)
+            painter.setBrush(QBrush(glow_color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(glow_rect)
         
-        # Main circle
+        # Main circle with gradient effect
         painter.setBrush(QBrush(circle_color))
-        painter.setPen(QPen(circle_color.darker(110), 2))
+        border_color = QColor(circle_color)
+        border_color = border_color.darker(120)
+        painter.setPen(QPen(border_color, 2))
         painter.drawEllipse(circle_rect)
         
-        # Draw step content (number or icon)
-        painter.setPen(QPen(text_color))
-        
+        # Draw step content (icon or number)
         if self.state == StepState.COMPLETE:
-            # Draw checkmark
-            font = QFont("Arial", 14, QFont.Weight.Bold)
-            painter.setFont(font)
-            painter.drawText(circle_rect, Qt.AlignmentFlag.AlignCenter, "✓")
+            # Use success icon
+            icon = self.icon_manager.get_icon("success", 24, text_color.name())
+            icon_rect = QRect(circle_x + 12, circle_y + 12, 24, 24)
+            icon.paint(painter, icon_rect)
         elif self.state == StepState.ERROR:
-            # Draw warning icon
-            font = QFont("Arial", 14, QFont.Weight.Bold)
-            painter.setFont(font)
-            painter.drawText(circle_rect, Qt.AlignmentFlag.AlignCenter, "!")
+            # Use error icon
+            icon = self.icon_manager.get_icon("error", 24, text_color.name())
+            icon_rect = QRect(circle_x + 12, circle_y + 12, 24, 24)
+            icon.paint(painter, icon_rect)
+        elif self.state == StepState.ACTIVE and self.step_index in self.step_icons:
+            # Use step-specific icon for active state
+            icon_name = self.step_icons[self.step_index]
+            icon = self.icon_manager.get_icon(icon_name, 24, text_color.name())
+            icon_rect = QRect(circle_x + 12, circle_y + 12, 24, 24)
+            icon.paint(painter, icon_rect)
         else:
-            # Draw step number
-            font = QFont("Arial", 12, QFont.Weight.Bold)
+            # Draw step number for locked state
+            font = QFont(BootForgeTheme.FONTS['default_family'], 14, QFont.Weight.Bold)
             painter.setFont(font)
+            painter.setPen(QPen(text_color))
             painter.drawText(circle_rect, Qt.AlignmentFlag.AlignCenter, str(self.step_index + 1))
         
-        # Draw step name below circle
-        name_rect = QRect(circle_x - 20, circle_y + self.CIRCLE_SIZE + 5, self.CIRCLE_SIZE + 40, 20)
-        font = QFont("Arial", 9)
+        # Draw step name below circle with improved styling
+        name_rect = QRect(circle_x - 30, circle_y + self.CIRCLE_SIZE + 8, self.CIRCLE_SIZE + 60, 25)
+        font = QFont(BootForgeTheme.FONTS['default_family'], 10)
+        font.setWeight(QFont.Weight.Medium)
         painter.setFont(font)
         
-        # Adjust text color based on state
+        # Adjust text color based on state using theme colors
         if self.state == StepState.LOCKED:
-            painter.setPen(QPen(QColor('#888888')))
+            painter.setPen(QPen(QColor(BootForgeTheme.COLORS['text_disabled'])))
+        elif self.state == StepState.ACTIVE:
+            painter.setPen(QPen(QColor(BootForgeTheme.COLORS['text_primary'])))
         else:
-            painter.setPen(QPen(QColor('#ffffff')))
+            painter.setPen(QPen(QColor(BootForgeTheme.COLORS['text_secondary'])))
         
         painter.drawText(name_rect, Qt.AlignmentFlag.AlignCenter, self.step_name)
+    
+    def _animate_state_change(self, old_state: StepState, new_state: StepState):
+        """Animate the transition between states"""
+        # Stop any existing animations
+        self._opacity_animation.stop()
+        self._pulse_timer.stop()
+        
+        if new_state == StepState.COMPLETE:
+            # Completion animation - scale up briefly then back to normal
+            self._scale_animation.setStartValue(1.0)
+            self._scale_animation.setEndValue(1.2)
+            self._scale_animation.finished.connect(self._completion_animation_finished)
+            self._scale_animation.start()
+        
+        elif new_state == StepState.ACTIVE:
+            # Start subtle pulse animation for active state
+            self._pulse_timer.start(2000)  # Pulse every 2 seconds
+        
+        elif new_state == StepState.ERROR:
+            # Error shake animation
+            self._shake_animation()
+    
+    def _completion_animation_finished(self):
+        """Called when completion scale animation finishes"""
+        # Scale back to normal
+        self._scale_animation.finished.disconnect()
+        self._scale_animation.setStartValue(1.2)
+        self._scale_animation.setEndValue(1.0)
+        self._scale_animation.start()
+    
+    def _pulse_active_step(self):
+        """Create a subtle pulse effect for active steps"""
+        if self.state == StepState.ACTIVE:
+            if self._pulse_direction > 0:
+                self._opacity_animation.setStartValue(1.0)
+                self._opacity_animation.setEndValue(0.7)
+                self._pulse_direction = -1
+            else:
+                self._opacity_animation.setStartValue(0.7)
+                self._opacity_animation.setEndValue(1.0)
+                self._pulse_direction = 1
+            
+            self._opacity_animation.start()
+    
+    def _shake_animation(self):
+        """Create a shake animation for error states"""
+        original_pos = self.pos()
+        
+        # Simple shake by moving slightly left and right
+        shake_timer = QTimer()
+        shake_count = 0
+        max_shakes = 6
+        
+        def shake_step():
+            nonlocal shake_count
+            if shake_count < max_shakes:
+                offset = 3 if shake_count % 2 == 0 else -3
+                self.move(original_pos.x() + offset, original_pos.y())
+                shake_count += 1
+            else:
+                self.move(original_pos)
+                shake_timer.stop()
+        
+        shake_timer.timeout.connect(shake_step)
+        shake_timer.start(50)  # 50ms intervals
+    
+    def enterEvent(self, event):
+        """Handle mouse enter with animation"""
+        if self.is_clickable():
+            self._scale_animation.stop()
+            self._scale_animation.setStartValue(1.0)
+            self._scale_animation.setEndValue(1.1)
+            self._scale_animation.start()
+        super().enterEvent(event)
+    
+    def leaveEvent(self, a0):
+        """Handle mouse leave with animation"""
+        if self.is_clickable():
+            self._scale_animation.stop()
+            self._scale_animation.setStartValue(1.1)
+            self._scale_animation.setEndValue(1.0)
+            self._scale_animation.start()
+        super().leaveEvent(a0)
+    
+    # PyQt Properties for animations
+    def getScaleFactor(self):
+        return self._scale_factor
+    
+    def setScaleFactor(self, value):
+        self._scale_factor = value
+        self.update()
+    
+    def getOpacityValue(self):
+        return self._opacity
+    
+    def setOpacityValue(self, value):
+        self._opacity = value
+        self.update()
+    
+    scaleFactor = pyqtProperty(float, getScaleFactor, setScaleFactor)
+    opacityValue = pyqtProperty(float, getOpacityValue, setOpacityValue)
 
 
 class StepperHeader(QWidget):
@@ -233,28 +409,42 @@ class StepperHeader(QWidget):
         layout.setContentsMargins(20, 15, 20, 15)
         layout.setSpacing(10)
         
-        # Title section
+        # Title section with enhanced styling
         title_layout = QHBoxLayout()
         
         title_label = QLabel("Deployment Workflow")
-        title_font = QFont("Arial", 14, QFont.Weight.Bold)
+        title_font = QFont(BootForgeTheme.FONTS['default_family'], 
+                          BootForgeTheme.FONTS['sizes']['xl'], 
+                          QFont.Weight.Bold)
         title_label.setFont(title_font)
-        title_label.setStyleSheet("color: #ffffff;")
+        title_label.setStyleSheet(f"color: {BootForgeTheme.COLORS['text_primary']};")
         title_layout.addWidget(title_label)
         
         title_layout.addStretch()
         
-        # Progress percentage
+        # Enhanced progress indicator
         self.progress_label = QLabel("Step 1 of 6")
-        self.progress_label.setStyleSheet("color: #cccccc; font-size: 12px;")
+        progress_font = QFont(BootForgeTheme.FONTS['default_family'], 
+                             BootForgeTheme.FONTS['sizes']['sm'], 
+                             QFont.Weight.Medium)
+        self.progress_label.setFont(progress_font)
+        self.progress_label.setStyleSheet(f"""
+            color: {BootForgeTheme.COLORS['text_secondary']};
+            background-color: {BootForgeTheme.COLORS['bg_input']};
+            padding: 4px 12px;
+            border-radius: {BootForgeTheme.RADIUS['base']}px;
+            border: 1px solid {BootForgeTheme.COLORS['border']};
+        """)
         title_layout.addWidget(self.progress_label)
         
         layout.addLayout(title_layout)
         
-        # Stepper indicators section
+        # Stepper indicators section with enhanced spacing
         stepper_layout = QHBoxLayout()
-        stepper_layout.setContentsMargins(0, 10, 0, 0)
-        stepper_layout.setSpacing(0)
+        stepper_layout.setContentsMargins(BootForgeTheme.SPACING['base'], 
+                                        BootForgeTheme.SPACING['lg'], 
+                                        BootForgeTheme.SPACING['base'], 0)
+        stepper_layout.setSpacing(BootForgeTheme.SPACING['xs'])
         
         # Create step indicators
         for i, step_name in enumerate(self.step_names):
@@ -274,19 +464,20 @@ class StepperHeader(QWidget):
         self._apply_styling()
     
     def _apply_styling(self):
-        """Apply professional styling to the stepper header"""
-        self.setStyleSheet("""
-            StepperHeader {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #3c3c3c, stop:1 #2b2b2b);
-                border: 1px solid #555555;
-                border-radius: 8px;
-                margin: 5px;
-            }
+        """Apply modern theme styling to the stepper header"""
+        self.setStyleSheet(f"""
+            StepperHeader {{
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 {BootForgeTheme.COLORS['bg_secondary']}, 
+                    stop:1 {BootForgeTheme.COLORS['bg_tertiary']});
+                border: 1px solid {BootForgeTheme.COLORS['border']};
+                border-radius: {BootForgeTheme.RADIUS['lg']}px;
+                margin: {BootForgeTheme.SPACING['sm']}px;
+            }}
         """)
         
-        # Set fixed height for consistent layout
-        self.setFixedHeight(120)
+        # Set enhanced height for better visual hierarchy
+        self.setFixedHeight(140)
     
     def _setup_connections(self):
         """Setup signal connections with WizardController"""
@@ -347,9 +538,10 @@ class StepperHeader(QWidget):
                 indicator.set_state(StepState.LOCKED, clickable=False)
     
     def _update_progress_label(self):
-        """Update the progress label text"""
+        """Update the progress label text with enhanced formatting"""
         step_name = self.step_names[self.current_step_index]
-        self.progress_label.setText(f"Step {self.current_step_index + 1} of {len(self.step_names)}: {step_name}")
+        progress_percentage = int(((self.current_step_index + 1) / len(self.step_names)) * 100)
+        self.progress_label.setText(f"Step {self.current_step_index + 1}/{len(self.step_names)} • {progress_percentage}% Complete")
     
     def _on_step_clicked(self, step_index: int):
         """Handle step indicator clicks with enhanced navigation guards"""

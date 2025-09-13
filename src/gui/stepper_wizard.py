@@ -48,10 +48,10 @@ class OSImageInfo:
     verification_errors: List[str] = field(default_factory=list)
     
     def is_valid(self) -> bool:
-        """Check if OS image selection is valid"""
+        """Check if OS image selection is valid - SECURITY: Only verified images allowed"""
         return (self.image_path is not None and 
                 Path(self.image_path).exists() and
-                self.verification_status in ["verified", "skipped"])
+                self.verification_status == "verified")
 
 
 @dataclass 

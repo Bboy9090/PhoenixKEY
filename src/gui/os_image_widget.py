@@ -721,3 +721,35 @@ class CustomImageImportDialog(QDialog):
                 
         except Exception as e:
             QMessageBox.critical(self, "Import Error", f"Error importing image: {e}")
+    
+    def validate_step(self) -> bool:
+        """SECURITY: Validate that only verified images are selected before proceeding to next step"""
+        
+        # Check if we have any selected images for the required files
+        if not self.selected_images:
+            QMessageBox.warning(self, "No Images Selected", 
+                               "Please select and verify OS images for all required files before proceeding.")
+            return False
+        
+        # Check if all required files have selected images
+        for required_file in self.required_files:
+            if required_file not in self.selected_images:
+                QMessageBox.warning(self, "Missing Required Images", 
+                                   f"Please select an image for required file: {required_file}")
+                return False
+        
+        # CRITICAL SECURITY CHECK: Ensure all selected images are verified
+        unverified_images = []
+        for file_name, image in self.selected_images.items():
+            if image.status != ImageStatus.VERIFIED:
+                unverified_images.append(f"{image.name} (Status: {image.status.value})")
+        
+        if unverified_images:
+            QMessageBox.critical(self, "Security Warning - Unverified Images", 
+                                f"The following images are not verified and cannot be used:\n\n" +
+                                "\n".join(unverified_images) +
+                                "\n\nPlease ensure all images are downloaded and verified before proceeding.")
+            return False
+        
+        # All validations passed
+        return True

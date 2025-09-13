@@ -4,13 +4,17 @@ Main stepper interface combining StepperHeader with step content for professiona
 """
 
 import logging
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QStackedWidget, QLabel, 
     QPushButton, QHBoxLayout, QSpacerItem, QSizePolicy,
     QGroupBox, QTextEdit, QProgressBar, QCheckBox,
     QComboBox, QListWidget, QFileDialog, QMessageBox,
-    QFrame, QGridLayout
+    QFrame, QGridLayout, QScrollArea, QTabWidget,
+    QListWidgetItem, QTreeWidget, QTreeWidgetItem,
+    QLineEdit, QSplitter, QTableWidget, QTableWidgetItem,
+    QHeaderView, QDialog, QDialogButtonBox, QFormLayout
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread, QMutex
 from PyQt6.QtGui import QFont, QPixmap, QIcon
@@ -21,6 +25,9 @@ from src.core.disk_manager import DiskManager
 from src.core.hardware_detector import HardwareDetector, DetectedHardware, DetectionConfidence
 from src.core.hardware_matcher import HardwareMatcher, ProfileMatch
 from src.core.vendor_database import VendorDatabase
+from src.gui.os_image_manager_qt import OSImageManagerQt
+from src.core.os_image_manager import OSImageInfo, ImageStatus, VerificationMethod, DownloadProgress
+from src.core.config import Config
 
 
 class StepView(QWidget):
@@ -94,7 +101,7 @@ class StepView(QWidget):
                 color: #888888;
             }
         """)
-        self.next_button.clicked.connect(self.request_next_step)
+        self.next_button.clicked.connect(self._on_next_clicked)
         nav_layout.addWidget(self.next_button)
         
         layout.addLayout(nav_layout)
@@ -106,6 +113,12 @@ class StepView(QWidget):
         """Enable/disable navigation buttons"""
         self.previous_button.setEnabled(previous)
         self.next_button.setEnabled(next)
+    
+    def _on_next_clicked(self):
+        """Handle Next button click with validation"""
+        if self.validate_step():
+            self.request_next_step.emit()
+        # If validation fails, stay on current step
     
     def validate_step(self) -> bool:
         """Validate step data before proceeding - override in subclasses"""
@@ -703,50 +716,800 @@ class HardwareDetectionStepView(StepView):
             self.detection_worker.cancel_detection()
 
 
+class OSImageDownloadWorker(QThread):
+    """Worker thread for downloading OS images to prevent UI blocking"""
+    
+    # Signals for communication with UI
+    download_started = pyqtSignal(str)  # image_id
+    download_progress = pyqtSignal(object)  # DownloadProgress
+    download_completed = pyqtSignal(str, str)  # image_id, local_path
+    download_failed = pyqtSignal(str, str)  # image_id, error_message
+    download_cancelled = pyqtSignal(str)  # image_id
+    
+    def __init__(self, image_manager: OSImageManagerQt, parent=None):
+        super().__init__(parent)
+        self.image_manager = image_manager
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self._download_queue: List[OSImageInfo] = []
+        self._cancelled = False
+        self._mutex = QMutex()
+        self._progress_connection = None  # Track progress connection
+    
+    def queue_download(self, image_info: OSImageInfo):
+        """Queue an image for download"""
+        self._mutex.lock()
+        self._download_queue.append(image_info)
+        self._mutex.unlock()
+        
+        if not self.isRunning():
+            self.start()
+    
+    def cancel_downloads(self):
+        """Cancel all downloads with proper cleanup"""
+        self._mutex.lock()
+        self._cancelled = True
+        queue_size = len(self._download_queue)
+        self._download_queue.clear()
+        self._mutex.unlock()
+        
+        # FIX: Disconnect progress signals on cancellation
+        if self._progress_connection:
+            try:
+                self.image_manager.download_progress.disconnect(self._progress_connection)
+                self._progress_connection = None
+            except:
+                pass
+        
+        self.logger.info(f"Download cancellation requested - cleared {queue_size} pending downloads")
+    
+    def run(self):
+        """Process download queue"""
+        while True:
+            self._mutex.lock()
+            if self._cancelled or not self._download_queue:
+                self._mutex.unlock()
+                break
+            
+            image_info = self._download_queue.pop(0)
+            self._mutex.unlock()
+            
+            try:
+                self.download_started.emit(image_info.id)
+                
+                # FIX: Connect to progress updates only once per download
+                if self._progress_connection:
+                    self.image_manager.download_progress.disconnect(self._progress_connection)
+                
+                self._progress_connection = lambda progress, img_id=image_info.id: (
+                    self.download_progress.emit(progress) if progress.image_id == img_id else None
+                )
+                self.image_manager.download_progress.connect(self._progress_connection)
+                
+                # Start download
+                success = self.image_manager.download_image(image_info)
+                
+                # FIX: Check cancellation before emitting completion
+                self._mutex.lock()
+                cancelled = self._cancelled
+                self._mutex.unlock()
+                
+                if cancelled:
+                    self.download_cancelled.emit(image_info.id)
+                    break
+                
+                if success and image_info.local_path:
+                    self.download_completed.emit(image_info.id, image_info.local_path)
+                else:
+                    self.download_failed.emit(image_info.id, "Download failed")
+                
+                # FIX: Disconnect progress signal after download
+                if self._progress_connection:
+                    self.image_manager.download_progress.disconnect(self._progress_connection)
+                    self._progress_connection = None
+                    
+            except Exception as e:
+                self.logger.error(f"Download error for {image_info.id}: {e}", exc_info=True)
+                self.download_failed.emit(image_info.id, str(e))
+                
+                # FIX: Ensure signal cleanup on error
+                if self._progress_connection:
+                    try:
+                        self.image_manager.download_progress.disconnect(self._progress_connection)
+                    except:
+                        pass
+                    self._progress_connection = None
+        
+        # FIX: Clean up state on thread completion
+        self._mutex.lock()
+        self._cancelled = False
+        if self._progress_connection:
+            try:
+                self.image_manager.download_progress.disconnect(self._progress_connection)
+            except:
+                pass
+            self._progress_connection = None
+        self._mutex.unlock()
+
+
 class OSImageSelectionStepView(StepView):
-    """OS image selection step view"""
+    """Revolutionary cloud-integrated OS image selection with smart recommendations"""
     
     def __init__(self):
         super().__init__(
-            "OS Image Selection",
-            "Select the operating system image file to deploy to your USB drive."
+            "Cloud OS Selection", 
+            "Choose from verified operating systems. BootForge intelligently downloads and verifies the perfect OS for your hardware."
         )
-        self.selected_image_path = None
+        
+        # Initialize state
+        self.selected_image: Optional[OSImageInfo] = None
+        self.available_images: List[OSImageInfo] = []
+        self.recommended_images: List[OSImageInfo] = []
+        self.cached_images: List[OSImageInfo] = []
+        self.download_progresses: Dict[str, DownloadProgress] = {}
+        self.detected_hardware: Optional[DetectedHardware] = None
+        self.wizard_state: Optional[WizardState] = None  # Add wizard state reference
+        
+        # Initialize cloud manager
+        try:
+            config = Config()
+            self.image_manager = OSImageManagerQt(config)
+            self.image_manager.images_updated.connect(self._refresh_images)
+            self.image_manager.download_progress.connect(self._on_download_progress)
+        except Exception as e:
+            self.logger.error(f"Failed to initialize image manager: {e}")
+            self.image_manager = None
+        
+        # Download worker
+        if self.image_manager:
+            self.download_worker = OSImageDownloadWorker(self.image_manager)
+            self.download_worker.download_started.connect(self._on_download_started)
+            self.download_worker.download_progress.connect(self._on_download_progress)
+            self.download_worker.download_completed.connect(self._on_download_completed)
+            self.download_worker.download_failed.connect(self._on_download_failed)
+        else:
+            self.download_worker = None
+        
         self._setup_content()
+        self._refresh_images()
+        
+        # SECURITY: Initially disable next button until image is verified
+        self.update_next_button_state()
     
     def _setup_content(self):
-        """Setup OS image selection content"""
-        # Image selection group
-        selection_group = QGroupBox("Select OS Image")
-        selection_layout = QVBoxLayout(selection_group)
+        """Setup comprehensive OS image selection UI"""
+        # Main splitter layout
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
         
-        # Current selection display
-        self.selection_label = QLabel("No image selected")
-        self.selection_label.setStyleSheet("color: #cccccc; font-size: 14px; padding: 10px;")
-        selection_layout.addWidget(self.selection_label)
+        # Left side: OS Selection
+        selection_widget = self._create_selection_widget()
+        main_splitter.addWidget(selection_widget)
         
-        # Browse button
-        browse_button = QPushButton("Browse for Image File...")
-        browse_button.setMinimumSize(200, 40)
-        browse_button.clicked.connect(self._browse_image)
-        selection_layout.addWidget(browse_button)
+        # Right side: Details and actions
+        details_widget = self._create_details_widget()
+        main_splitter.addWidget(details_widget)
         
-        self.content_layout.addWidget(selection_group)
+        # Set proportions (60% selection, 40% details)
+        main_splitter.setSizes([600, 400])
+        self.content_layout.addWidget(main_splitter)
         
-        # Image info group
-        self.info_group = QGroupBox("Image Information")
-        info_layout = QVBoxLayout(self.info_group)
+        # Status bar
+        self.status_label = QLabel("🌩️ Loading cloud OS catalog...")
+        self.status_label.setStyleSheet("color: #cccccc; font-size: 12px; padding: 5px;")
+        self.content_layout.addWidget(self.status_label)
         
-        self.info_text = QTextEdit()
-        self.info_text.setMaximumHeight(150)
-        self.info_text.setReadOnly(True)
-        info_layout.addWidget(self.info_text)
-        
-        self.info_group.setVisible(False)
-        self.content_layout.addWidget(self.info_group)
+        # Initially disable next button
+        self.set_navigation_enabled(next=False)
     
-    def _browse_image(self):
-        """Browse for image file"""
+    def _create_selection_widget(self) -> QWidget:
+        """Create the OS selection widget"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Header with filters
+        header_layout = QHBoxLayout()
+        
+        title = QLabel("Available Operating Systems")
+        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        title.setStyleSheet("color: #ffffff; margin-bottom: 10px;")
+        header_layout.addWidget(title)
+        
+        header_layout.addStretch()
+        
+        # OS Family filter
+        self.os_filter = QComboBox()
+        self.os_filter.addItem("All OS", "all")
+        self.os_filter.addItem("🐧 Linux", "linux")
+        self.os_filter.addItem("🍎 macOS", "macos")
+        self.os_filter.addItem("🪟 Windows", "windows")
+        self.os_filter.currentTextChanged.connect(self._filter_images)
+        header_layout.addWidget(self.os_filter)
+        
+        # Refresh button
+        refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn.setToolTip("Refresh available images from cloud providers")
+        refresh_btn.clicked.connect(self._refresh_images)
+        header_layout.addWidget(refresh_btn)
+        
+        layout.addLayout(header_layout)
+        
+        # Tabs for different image sources
+        self.image_tabs = QTabWidget()
+        
+        # Recommended tab
+        self.recommended_list = self._create_image_list()
+        self.image_tabs.addTab(self.recommended_list, "⭐ Recommended")
+        
+        # All available tab
+        self.available_list = self._create_image_list()
+        self.image_tabs.addTab(self.available_list, "☁️ Cloud Downloads")
+        
+        # Cached tab
+        self.cached_list = self._create_image_list()
+        self.image_tabs.addTab(self.cached_list, "💾 Downloaded")
+        
+        layout.addWidget(self.image_tabs)
+        
+        # Auto-download recommended button
+        self.auto_download_btn = QPushButton("🚀 Auto-Download Recommended OS")
+        self.auto_download_btn.setMinimumHeight(45)
+        self.auto_download_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1e90ff, stop:1 #0078d4);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #4169e1, stop:1 #106ebe);
+            }
+            QPushButton:pressed {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #0047ab, stop:1 #005a9e);
+            }
+            QPushButton:disabled {
+                background-color: #4a4a4a;
+                color: #888888;
+            }
+        """)
+        self.auto_download_btn.clicked.connect(self._auto_download_recommended)
+        self.auto_download_btn.setEnabled(False)
+        layout.addWidget(self.auto_download_btn)
+        
+        return widget
+    
+    def _create_image_list(self) -> QListWidget:
+        """Create a styled image list widget"""
+        list_widget = QListWidget()
+        list_widget.setAlternatingRowColors(True)
+        list_widget.setStyleSheet("""
+            QListWidget {
+                background-color: #2d2d30;
+                border: 1px solid #555555;
+                border-radius: 6px;
+            }
+            QListWidget::item {
+                padding: 10px;
+                border-bottom: 1px solid #3c3c3c;
+                color: #ffffff;
+            }
+            QListWidget::item:hover {
+                background-color: #3c3c3c;
+            }
+            QListWidget::item:selected {
+                background-color: #0078d4;
+            }
+        """)
+        list_widget.itemClicked.connect(self._on_image_selected)
+        list_widget.itemDoubleClicked.connect(self._on_image_double_clicked)
+        return list_widget
+    
+    def _create_details_widget(self) -> QWidget:
+        """Create the image details and actions widget"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Selection info group
+        self.selection_group = QGroupBox("Selected Image")
+        selection_layout = QVBoxLayout(self.selection_group)
+        
+        self.selection_icon = QLabel("💿")
+        self.selection_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.selection_icon.setStyleSheet("font-size: 32px; margin: 10px;")
+        selection_layout.addWidget(self.selection_icon)
+        
+        self.selection_name = QLabel("No OS selected")
+        self.selection_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.selection_name.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffffff;")
+        selection_layout.addWidget(self.selection_name)
+        
+        self.selection_details = QLabel("")
+        self.selection_details.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.selection_details.setWordWrap(True)
+        self.selection_details.setStyleSheet("color: #cccccc; margin: 10px;")
+        selection_layout.addWidget(self.selection_details)
+        
+        layout.addWidget(self.selection_group)
+        
+        # Download progress group
+        self.progress_group = QGroupBox("Download Progress")
+        progress_layout = QVBoxLayout(self.progress_group)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #555555;
+                border-radius: 5px;
+                text-align: center;
+                color: #ffffff;
+            }
+            QProgressBar::chunk {
+                background-color: #0078d4;
+                border-radius: 3px;
+            }
+        """)
+        progress_layout.addWidget(self.progress_bar)
+        
+        self.progress_label = QLabel("")
+        self.progress_label.setStyleSheet("color: #cccccc; font-size: 12px;")
+        progress_layout.addWidget(self.progress_label)
+        
+        self.progress_group.setVisible(False)
+        layout.addWidget(self.progress_group)
+        
+        # Action buttons
+        actions_layout = QVBoxLayout()
+        
+        self.download_btn = QPushButton("⬇️ Download")
+        self.download_btn.setMinimumHeight(35)
+        self.download_btn.clicked.connect(self._download_selected)
+        self.download_btn.setEnabled(False)
+        actions_layout.addWidget(self.download_btn)
+        
+        self.verify_btn = QPushButton("🔒 Verify")
+        self.verify_btn.setMinimumHeight(35)
+        self.verify_btn.clicked.connect(self._verify_selected)
+        self.verify_btn.setEnabled(False)
+        actions_layout.addWidget(self.verify_btn)
+        
+        self.browse_btn = QPushButton("📁 Browse Local")
+        self.browse_btn.setMinimumHeight(35)
+        self.browse_btn.clicked.connect(self._browse_local_image)
+        actions_layout.addWidget(self.browse_btn)
+        
+        layout.addLayout(actions_layout)
+        
+        # Security status
+        self.security_group = QGroupBox("Security Status")
+        security_layout = QVBoxLayout(self.security_group)
+        
+        self.security_status = QLabel("⏳ No image selected")
+        self.security_status.setWordWrap(True)
+        self.security_status.setStyleSheet("color: #cccccc; padding: 10px;")
+        security_layout.addWidget(self.security_status)
+        
+        layout.addWidget(self.security_group)
+        
+        layout.addStretch()
+        return widget
+    
+    def _refresh_images(self):
+        """Refresh available images from cloud providers"""
+        if not self.image_manager:
+            self.status_label.setText("❌ Cloud manager not available")
+            return
+        
+        try:
+            self.status_label.setText("🔄 Refreshing cloud OS catalog...")
+            
+            # Get all available images
+            self.available_images = self.image_manager.get_available_images()
+            self.cached_images = self.image_manager.get_cached_images()
+            
+            # Generate smart recommendations
+            self._generate_recommendations()
+            
+            # Update UI lists
+            self._update_image_lists()
+            
+            count = len(self.available_images)
+            cached_count = len(self.cached_images)
+            self.status_label.setText(f"☁️ {count} available, {cached_count} cached images ready")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to refresh images: {e}", exc_info=True)
+            self.status_label.setText(f"❌ Failed to refresh: {str(e)}")
+    
+    def _generate_recommendations(self):
+        """Generate hardware-based OS recommendations with detailed scoring"""
+        self.recommended_images = []
+        
+        if not self.detected_hardware or not self.available_images:
+            self.logger.info("Skipping recommendations - no hardware or images available")
+            return
+        
+        try:
+            # Extract hardware details with better attribute access
+            hardware = self.detected_hardware
+            cpu_vendor = getattr(hardware, 'cpu_vendor', '').lower()
+            cpu_model = getattr(hardware, 'cpu_model', '').lower()
+            is_mac = ('apple' in cpu_vendor or 'apple' in cpu_model or 
+                     getattr(hardware, 'is_mac', False) or
+                     hasattr(hardware, 'system_manufacturer') and 
+                     'apple' in getattr(hardware, 'system_manufacturer', '').lower())
+            memory_gb = getattr(hardware, 'memory_gb', 0)
+            architecture = getattr(hardware, 'architecture', '').lower()
+            gpu_vendor = getattr(hardware, 'gpu_vendor', '').lower()
+            
+            self.logger.info(f"Generating recommendations for: CPU={cpu_vendor}, Memory={memory_gb}GB, Arch={architecture}, Mac={is_mac}")
+            
+            for image in self.available_images:
+                score = 0
+                reasons = []
+                
+                # ENHANCED: Mac hardware strongly prefers macOS
+                if is_mac and image.os_family == 'macos':
+                    score += 60
+                    reasons.append(f"Perfect match for Apple hardware (+60)")
+                elif is_mac and image.os_family != 'macos':
+                    score -= 20  # Penalty for non-macOS on Mac
+                    reasons.append(f"Not optimal for Apple hardware (-20)")
+                
+                # ENHANCED: Architecture-specific optimization
+                if image.architecture.lower() == architecture:
+                    score += 30
+                    reasons.append(f"Native {architecture} support (+30)")
+                elif 'universal' in image.architecture.lower() or image.architecture.lower() == 'x86_64':
+                    score += 15
+                    reasons.append(f"Universal compatibility (+15)")
+                
+                # ENHANCED: Memory-based OS selection
+                min_memory_req = {
+                    'macos': 8,
+                    'windows': 4,
+                    'linux': 2
+                }.get(image.os_family, 2)
+                
+                if memory_gb >= min_memory_req * 2:
+                    score += 25
+                    reasons.append(f"Excellent memory fit ({memory_gb}GB available, {min_memory_req}GB required) (+25)")
+                elif memory_gb >= min_memory_req:
+                    score += 15
+                    reasons.append(f"Adequate memory ({memory_gb}GB available, {min_memory_req}GB required) (+15)")
+                else:
+                    score -= 30
+                    reasons.append(f"Insufficient memory ({memory_gb}GB available, {min_memory_req}GB required) (-30)")
+                
+                # ENHANCED: CPU vendor compatibility
+                if 'intel' in cpu_vendor and image.os_family in ['windows', 'linux']:
+                    score += 15
+                    reasons.append(f"Intel CPU optimized (+15)")
+                elif 'amd' in cpu_vendor and image.os_family in ['windows', 'linux']:
+                    score += 15
+                    reasons.append(f"AMD CPU optimized (+15)")
+                
+                # ENHANCED: Version stability preferences
+                version_lower = image.version.lower()
+                if 'lts' in version_lower:
+                    score += 20
+                    reasons.append(f"Long Term Support version (+20)")
+                elif 'stable' in version_lower:
+                    score += 15
+                    reasons.append(f"Stable release (+15)")
+                elif 'beta' in version_lower or 'alpha' in version_lower:
+                    score -= 10
+                    reasons.append(f"Pre-release version (-10)")
+                
+                # ENHANCED: GPU compatibility (basic check)
+                if 'nvidia' in gpu_vendor and image.os_family == 'linux':
+                    score += 10
+                    reasons.append(f"Good NVIDIA GPU support on Linux (+10)")
+                
+                # ENHANCED: Size considerations for memory-constrained systems
+                size_gb = image.size_bytes / (1024 * 1024 * 1024)
+                if memory_gb <= 4 and size_gb > 6:
+                    score -= 15
+                    reasons.append(f"Large image for low-memory system (-15)")
+                elif size_gb <= 2:
+                    score += 5
+                    reasons.append(f"Compact image size (+5)")
+                
+                # Add to recommendations if score meets threshold
+                if score >= 20:  # Lowered threshold to include more options
+                    image.metadata['recommendation_score'] = score
+                    image.metadata['recommendation_reasons'] = reasons
+                    self.recommended_images.append(image)
+                    self.logger.debug(f"Recommended {image.name}: Score={score}, Reasons={reasons}")
+            
+            # Sort by recommendation score (highest first)
+            self.recommended_images.sort(
+                key=lambda img: img.metadata.get('recommendation_score', 0), 
+                reverse=True
+            )
+            
+            # Log recommendation results
+            if self.recommended_images:
+                top_rec = self.recommended_images[0]
+                self.logger.info(f"Top recommendation: {top_rec.name} (Score: {top_rec.metadata['recommendation_score']})")
+            else:
+                self.logger.warning("No OS images met recommendation criteria")
+            
+            # Enable auto-download if we have recommendations
+            self.auto_download_btn.setEnabled(len(self.recommended_images) > 0)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to generate recommendations: {e}", exc_info=True)
+    
+    def _update_image_lists(self):
+        """Update all image lists with filtered content"""
+        os_filter = self.os_filter.currentData()
+        
+        # Helper function to add image to list
+        def populate_list(list_widget: QListWidget, images: List[OSImageInfo]):
+            list_widget.clear()
+            
+            for image in images:
+                # Apply OS family filter
+                if os_filter != "all" and image.os_family != os_filter:
+                    continue
+                
+                # Create list item
+                item = QListWidgetItem()
+                
+                # Format display text
+                icon = self._get_os_icon(image.os_family)
+                status_icon = self._get_status_icon(image.status)
+                size_mb = round(image.size_bytes / (1024 * 1024), 1)
+                
+                display_text = f"{icon} {image.name}\n"
+                display_text += f"   {image.version} • {image.architecture} • {size_mb} MB"
+                
+                if image.status != ImageStatus.UNKNOWN:
+                    display_text += f" {status_icon}"
+                
+                # ENHANCED: Add recommendation badge with detailed scoring
+                if hasattr(image, 'metadata') and 'recommendation_score' in image.metadata:
+                    score = image.metadata['recommendation_score']
+                    if score >= 60:
+                        display_text = f"🏆 {display_text} (Score: {score})"
+                    elif score >= 40:
+                        display_text = f"⭐ {display_text} (Score: {score})"
+                    elif score >= 20:
+                        display_text = f"✅ {display_text} (Score: {score})"
+                
+                item.setText(display_text)
+                item.setData(Qt.ItemDataRole.UserRole, image)
+                
+                # Color coding based on status
+                if image.status == ImageStatus.VERIFIED:
+                    item.setBackground(QColor(0, 120, 0, 30))  # Green tint
+                elif image.status == ImageStatus.DOWNLOADING:
+                    item.setBackground(QColor(0, 120, 212, 30))  # Blue tint
+                elif image.status == ImageStatus.FAILED:
+                    item.setBackground(QColor(220, 0, 0, 30))  # Red tint
+                
+                list_widget.addItem(item)
+        
+        # Populate all lists
+        populate_list(self.recommended_list, self.recommended_images)
+        populate_list(self.available_list, self.available_images)
+        populate_list(self.cached_list, self.cached_images)
+    
+    def _get_os_icon(self, os_family: str) -> str:
+        """Get icon for OS family"""
+        icons = {
+            'linux': '🐧',
+            'macos': '🍎', 
+            'windows': '🪟',
+            'freebsd': '😈',
+            'custom': '💿'
+        }
+        return icons.get(os_family, '💿')
+    
+    def _get_status_icon(self, status: ImageStatus) -> str:
+        """Get icon for image status"""
+        icons = {
+            ImageStatus.VERIFIED: '✅',
+            ImageStatus.DOWNLOADED: '💾',
+            ImageStatus.DOWNLOADING: '⬇️',
+            ImageStatus.FAILED: '❌',
+            ImageStatus.PAUSED: '⏸️',
+            ImageStatus.VERIFYING: '🔒',
+            ImageStatus.CACHED: '💾'
+        }
+        return icons.get(status, '')
+    
+    def _filter_images(self):
+        """Apply filters and update image lists"""
+        self._update_image_lists()
+    
+    def _on_image_selected(self, item: QListWidgetItem):
+        """Handle image selection from any list"""
+        image_info: OSImageInfo = item.data(Qt.ItemDataRole.UserRole)
+        if image_info:
+            self.selected_image = image_info
+            self._update_selection_display()
+            self._update_action_buttons()
+            # SECURITY: Check validation state when image changes
+            self.update_next_button_state()
+    
+    def _on_image_double_clicked(self, item: QListWidgetItem):
+        """Handle double-click on image (start download or select)"""
+        image_info: OSImageInfo = item.data(Qt.ItemDataRole.UserRole)
+        if image_info:
+            self.selected_image = image_info
+            self._update_selection_display()
+            
+            # Auto-download if not available locally
+            if image_info.status in [ImageStatus.AVAILABLE, ImageStatus.UNKNOWN]:
+                self._download_selected()
+            elif image_info.status == ImageStatus.VERIFIED:
+                # Already ready, check validation and update state
+                self.update_next_button_state()
+    
+    def _update_selection_display(self):
+        """Update the selection details display"""
+        if not self.selected_image:
+            self.selection_icon.setText("💿")
+            self.selection_name.setText("No OS selected")
+            self.selection_details.setText("")
+            self.security_status.setText("⏳ No image selected")
+            return
+        
+        image = self.selected_image
+        
+        # Update icon and name
+        icon = self._get_os_icon(image.os_family)
+        self.selection_icon.setText(icon)
+        self.selection_name.setText(image.name)
+        
+        # ENHANCED: Update details with recommendation reasoning
+        size_mb = round(image.size_bytes / (1024 * 1024), 1)
+        details = f"Version: {image.version}\n"
+        details += f"Architecture: {image.architecture}\n" 
+        details += f"Size: {size_mb} MB\n"
+        details += f"Provider: {image.provider}"
+        
+        # Show detailed recommendation info
+        if hasattr(image, 'metadata') and 'recommendation_score' in image.metadata:
+            score = image.metadata['recommendation_score']
+            details += f"\n\n⭐ Recommended (Score: {score})\n"
+            
+            if 'recommendation_reasons' in image.metadata:
+                reasons = image.metadata['recommendation_reasons'][:3]  # Show top 3 reasons
+                for reason in reasons:
+                    details += f"• {reason}\n"
+        
+        self.selection_details.setText(details)
+        
+        # Update security status
+        self._update_security_status()
+    
+    def _update_security_status(self):
+        """Update security status display"""
+        if not self.selected_image:
+            return
+        
+        image = self.selected_image
+        
+        if image.status == ImageStatus.VERIFIED:
+            status = "🔒 Verified & Secure\n"
+            status += f"✅ {image.checksum_type.upper()} checksum verified\n"
+            if image.verification_method != VerificationMethod.NONE:
+                status += f"✅ {image.verification_method.value} verification passed"
+        elif image.status == ImageStatus.DOWNLOADED:
+            status = "⏳ Downloaded, verification pending\n"
+            status += "Click 'Verify' to check integrity"
+        elif image.status == ImageStatus.DOWNLOADING:
+            status = "⬇️ Downloading...\n"
+            status += "Verification will run automatically"
+        elif image.status == ImageStatus.FAILED:
+            status = "❌ Download or verification failed\n"
+            status += "Try downloading again"
+        else:
+            status = "☁️ Available for download\n"
+            status += f"Will verify using {image.checksum_type.upper()}"
+        
+        self.security_status.setText(status)
+    
+    def _update_action_buttons(self):
+        """Update action button states based on selected image"""
+        if not self.selected_image:
+            self.download_btn.setEnabled(False)
+            self.verify_btn.setEnabled(False)
+            return
+        
+        image = self.selected_image
+        
+        # Download button
+        can_download = image.status in [ImageStatus.AVAILABLE, ImageStatus.UNKNOWN, ImageStatus.FAILED]
+        self.download_btn.setEnabled(can_download)
+        
+        # Verify button
+        can_verify = image.status in [ImageStatus.DOWNLOADED, ImageStatus.FAILED]
+        self.verify_btn.setEnabled(can_verify)
+    
+    def _auto_download_recommended(self):
+        """Auto-download the top recommended OS"""
+        if not self.recommended_images:
+            QMessageBox.information(
+                self, 
+                "No Recommendations",
+                "No OS recommendations available. Try running hardware detection first."
+            )
+            return
+        
+        # Select and download top recommendation
+        top_recommendation = self.recommended_images[0]
+        self.selected_image = top_recommendation
+        self._update_selection_display()
+        self._update_action_buttons()
+        
+        # Start download
+        self._download_selected()
+    
+    def _download_selected(self):
+        """Download the selected image"""
+        if not self.selected_image or not self.download_worker:
+            return
+        
+        self.logger.info(f"Starting download of {self.selected_image.name}")
+        
+        # Show progress UI
+        self.progress_group.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("Initializing download...")
+        
+        # Queue download
+        self.download_worker.queue_download(self.selected_image)
+        
+        # Update button states
+        self.download_btn.setEnabled(False)
+        self.auto_download_btn.setEnabled(False)
+    
+    def _verify_selected(self):
+        """Verify the selected image"""
+        if not self.selected_image or not self.image_manager:
+            return
+        
+        self.logger.info(f"Starting verification of {self.selected_image.name}")
+        
+        try:
+            # Update UI
+            self.progress_group.setVisible(True)
+            self.progress_bar.setValue(0)
+            self.progress_label.setText("Verifying image integrity...")
+            
+            # Run verification
+            success = self.image_manager.verify_image(self.selected_image.id)
+            
+            if success:
+                self.selected_image.status = ImageStatus.VERIFIED
+                self.progress_bar.setValue(100)
+                self.progress_label.setText("✅ Verification successful!")
+                # SECURITY: Only enable next after successful verification
+                # Connect verification completion to re-enable Next
+                self.update_next_button_state()
+            else:
+                self.selected_image.status = ImageStatus.FAILED
+                self.progress_label.setText("❌ Verification failed!")
+                # SECURITY: Keep next disabled on verification failure  
+                # Connect verification completion to re-enable Next
+                self.update_next_button_state()
+            
+            self._update_security_status()
+            self._update_action_buttons()
+            
+        except Exception as e:
+            self.logger.error(f"Verification error: {e}", exc_info=True)
+            self.progress_label.setText(f"❌ Verification error: {str(e)}")
+    
+    def _browse_local_image(self):
+        """Browse for local image file"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select OS Image File",
@@ -755,21 +1518,209 @@ class OSImageSelectionStepView(StepView):
         )
         
         if file_path:
-            self.selected_image_path = file_path
-            self.selection_label.setText(f"Selected: {file_path}")
+            # Create custom OSImageInfo for local file
+            from pathlib import Path
+            file_info = Path(file_path)
             
-            # Show mock image info
-            info = f"""File: {file_path}
-Size: 4.2 GB
-Type: macOS Installer (DMG)
-Version: macOS Ventura 13.0
-Architecture: x86_64 + ARM64 (Universal)
-Checksum: SHA256 verified ✓"""
+            local_image = OSImageInfo(
+                id=f"local_{file_info.stem}",
+                name=file_info.name,
+                os_family="custom",
+                version="Local File",
+                architecture="unknown",
+                size_bytes=file_info.stat().st_size,
+                download_url="",
+                local_path=str(file_path),
+                status=ImageStatus.DOWNLOADED,
+                provider="local"
+            )
             
-            self.info_text.setText(info)
-            self.info_group.setVisible(True)
-            self.set_navigation_enabled(next=True)
-            self.step_completed.emit()
+            self.selected_image = local_image
+            self._update_selection_display()
+            self._update_action_buttons()
+            
+            # Offer to verify
+            reply = QMessageBox.question(
+                self,
+                "Verify Local Image",
+                "Would you like to verify the integrity of this local image?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self._verify_selected()
+            else:
+                # Trust local file and enable next
+                self.selected_image.status = ImageStatus.VERIFIED
+                self.set_navigation_enabled(next=True)
+                self.step_completed.emit()
+    
+    # Download worker signal handlers
+    def _on_download_started(self, image_id: str):
+        """Handle download started"""
+        if self.selected_image and self.selected_image.id == image_id:
+            self.selected_image.status = ImageStatus.DOWNLOADING
+            self._update_security_status()
+            self.status_label.setText(f"⬇️ Downloading {self.selected_image.name}...")
+            # SECURITY: Disable next until verification complete
+            self.set_navigation_enabled(next=False)
+    
+    def _on_download_progress(self, progress: DownloadProgress):
+        """Handle download progress updates"""
+        if not self.selected_image or self.selected_image.id != progress.image_id:
+            return
+        
+        # Update progress bar
+        self.progress_bar.setValue(int(progress.progress_percent))
+        
+        # Update progress label with speed and ETA
+        speed_text = f"{progress.speed_mbps:.1f} MB/s" if progress.speed_mbps > 0 else "-- MB/s"
+        eta_text = f"{progress.eta_seconds // 60}m {progress.eta_seconds % 60}s" if progress.eta_seconds > 0 else "--"
+        
+        downloaded_mb = progress.downloaded_bytes / (1024 * 1024)
+        total_mb = progress.total_bytes / (1024 * 1024)
+        
+        self.progress_label.setText(
+            f"⬇️ {downloaded_mb:.1f}/{total_mb:.1f} MB • {speed_text} • ETA: {eta_text}"
+        )
+    
+    def _on_download_completed(self, image_id: str, local_path: str):
+        """Handle download completion"""
+        if self.selected_image and self.selected_image.id == image_id:
+            self.selected_image.status = ImageStatus.DOWNLOADED
+            self.selected_image.local_path = local_path
+            
+            self.progress_bar.setValue(100)
+            self.progress_label.setText("✅ Download complete! Starting verification...")
+            
+            # SECURITY: Still keep next disabled until verification
+            self.set_navigation_enabled(next=False)
+            
+            # Auto-start verification
+            QTimer.singleShot(1000, self._verify_selected)
+            
+            self.status_label.setText(f"✅ Downloaded {self.selected_image.name}")
+            self._update_security_status()
+            self._update_action_buttons()
+    
+    def _on_download_failed(self, image_id: str, error_message: str):
+        """Handle download failure"""
+        if self.selected_image and self.selected_image.id == image_id:
+            self.selected_image.status = ImageStatus.FAILED
+            
+            self.progress_label.setText(f"❌ Download failed: {error_message}")
+            self.status_label.setText(f"❌ Failed to download {self.selected_image.name}")
+            
+            self._update_security_status()
+            self._update_action_buttons()
+            
+            # Re-enable download button for retry
+            self.download_btn.setEnabled(True)
+            self.auto_download_btn.setEnabled(len(self.recommended_images) > 0)
+    
+    def update_next_button_state(self):
+        """Update Next button state based on validation"""
+        is_valid = self.validate_step()
+        self.step_completed.emit(is_valid)  # Enable/disable Next
+    
+    def _update_navigation_state(self):
+        """Update navigation button state based on current validation status"""
+        self.update_next_button_state()
+    
+    def on_step_entered(self):
+        """Called when step becomes active - check validation state"""
+        self.update_next_button_state()
+    
+    # Step interface methods
+    def validate_step(self) -> bool:
+        """Validate that selected image is verified before allowing Next"""
+        if not self.wizard_state or not self.wizard_state.os_image:
+            return False
+        
+        selected_image = self.wizard_state.os_image
+        if not selected_image.is_valid():
+            QMessageBox.warning(self, "Verification Required", 
+                "Please select a verified OS image before proceeding.")
+            return False
+        
+        return True
+    
+    def get_step_data(self) -> Dict[str, Any]:
+        """ENHANCED: Get comprehensive step data for wizard state"""
+        data = {}
+        
+        if self.selected_image:
+            data["selected_image"] = self.selected_image
+            data["image_path"] = self.selected_image.local_path
+            data["image_info"] = {
+                "id": self.selected_image.id,
+                "name": self.selected_image.name,
+                "os_family": self.selected_image.os_family,
+                "version": self.selected_image.version,
+                "architecture": self.selected_image.architecture,
+                "size_bytes": self.selected_image.size_bytes,
+                "verified": self.selected_image.status == ImageStatus.VERIFIED,
+                "verification_method": self.selected_image.verification_method.value,
+                "checksum": self.selected_image.checksum,
+                "local_path": self.selected_image.local_path,
+                "is_recommended": hasattr(self.selected_image, 'metadata') and 'recommendation_score' in self.selected_image.metadata
+            }
+            
+            # Include recommendation data if available
+            if hasattr(self.selected_image, 'metadata'):
+                if 'recommendation_score' in self.selected_image.metadata:
+                    data["recommendation_score"] = self.selected_image.metadata['recommendation_score']
+                if 'recommendation_reasons' in self.selected_image.metadata:
+                    data["recommendation_reasons"] = self.selected_image.metadata['recommendation_reasons']
+        
+        # Include current state
+        data["recommendations_count"] = len(self.recommended_images)
+        data["available_count"] = len(self.available_images)
+        data["cached_count"] = len(self.cached_images)
+        
+        self.logger.info(f"Exporting step data with {len(data)} fields")
+        return data
+    
+    def load_step_data(self, data: Dict[str, Any]):
+        """ENHANCED: Load step data from wizard state with better integration"""
+        self.logger.info(f"Loading step data: {list(data.keys())}")
+        
+        # Load hardware data first for recommendations
+        if "detected_hardware" in data:
+            self.detected_hardware = data["detected_hardware"]
+            self.logger.info("Loaded hardware data for recommendations")
+            self._generate_recommendations()
+            self._update_image_lists()
+        
+        # Load previously selected image
+        if "selected_image" in data:
+            self.selected_image = data["selected_image"]
+            self._update_selection_display()
+            self._update_action_buttons()
+            
+            # SECURITY: Only enable next if image is verified
+            if self.validate_step():
+                self.set_navigation_enabled(next=True)
+                self.logger.info("Step validation passed - verified image selected")
+            else:
+                self.set_navigation_enabled(next=False)
+                self.logger.warning("Step validation failed - no verified image")
+    
+    def on_step_entered(self):
+        """Called when step becomes active"""
+        self.logger.info("OS Image Selection step entered")
+        
+        # Refresh images if not loaded
+        if not self.available_images:
+            QTimer.singleShot(500, self._refresh_images)
+    
+    def on_step_left(self):
+        """Called when leaving step"""
+        self.logger.info("OS Image Selection step exited")
+        
+        # Cancel any active downloads
+        if self.download_worker and self.download_worker.isRunning():
+            self.download_worker.cancel_downloads()
 
 
 class USBConfigurationStepView(StepView):

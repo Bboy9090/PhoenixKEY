@@ -21,7 +21,7 @@ class IconManager:
         # Define icon mappings
         self.icon_map = {
             # App icons
-            "app": "BootForge_App_Icon_1685d1e8.png",
+            "app": "app_icon_premium.png",
             
             # Toolbar icons
             "refresh": self._create_refresh_icon,

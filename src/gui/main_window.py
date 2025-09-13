@@ -420,16 +420,88 @@ class BootForgeMainWindow(QMainWindow):
     
     def _show_about(self):
         """Show about dialog"""
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.setWindowTitle("About BootForge")
-        msg.setText("BootForge v1.0.0")
-        msg.setInformativeText(
-            "Professional Cross-Platform OS Deployment Tool\\n\\n"
-            "Create bootable USB drives for macOS and Windows\\n"
-            "with advanced features and plugin support."
-        )
-        msg.exec()
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QPixmap
+        from pathlib import Path
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("About BootForge")
+        dialog.setFixedSize(500, 350)
+        dialog.setModal(True)
+        
+        # Apply theme styling
+        dialog.setStyleSheet(BootForgeTheme.get_stylesheet())
+        
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Hero banner
+        banner_label = QLabel()
+        banner_path = Path(__file__).parent.parent.parent / "assets" / "icons" / "hero_banner.png"
+        if banner_path.exists():
+            pixmap = QPixmap(str(banner_path))
+            scaled_pixmap = pixmap.scaled(500, 150, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+            banner_label.setPixmap(scaled_pixmap)
+            banner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            banner_label.setStyleSheet("border: none; background-color: #1e1e1e;")
+        layout.addWidget(banner_label)
+        
+        # Content area
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(30, 20, 30, 20)
+        content_layout.setSpacing(15)
+        
+        # Title
+        title_label = QLabel("BootForge v1.0.0")
+        title_label.setStyleSheet(f"""
+            color: {BootForgeTheme.COLORS['text_primary']};
+            font-size: {BootForgeTheme.FONTS['sizes']['2xl']}px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        """)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        content_layout.addWidget(title_label)
+        
+        # Subtitle
+        subtitle_label = QLabel("Professional Cross-Platform OS Deployment Tool")
+        subtitle_label.setStyleSheet(f"""
+            color: {BootForgeTheme.COLORS['primary']};
+            font-size: {BootForgeTheme.FONTS['sizes']['lg']}px;
+            font-weight: 500;
+        """)
+        subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        content_layout.addWidget(subtitle_label)
+        
+        # Description
+        desc_label = QLabel("Create bootable USB drives for macOS, Windows, and Linux with advanced features including hardware detection, safety validation, and plugin support.")
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet(f"""
+            color: {BootForgeTheme.COLORS['text_secondary']};
+            font-size: {BootForgeTheme.FONTS['sizes']['base']}px;
+            line-height: 1.5;
+        """)
+        desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        content_layout.addWidget(desc_label)
+        
+        layout.addWidget(content_widget)
+        
+        # Button area
+        button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(30, 0, 30, 30)
+        button_layout.addStretch()
+        
+        close_button = QPushButton("Close")
+        close_button.setMinimumSize(100, 35)
+        close_button.setProperty("class", "primary")
+        close_button.clicked.connect(dialog.close)
+        button_layout.addWidget(close_button)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
     
     def _show_documentation(self):
         """Show documentation"""

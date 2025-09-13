@@ -21,13 +21,15 @@ from PyQt6.QtGui import QFont, QPixmap, QIcon
 
 from src.gui.stepper_header import StepperHeader, StepState
 from src.gui.stepper_wizard import WizardController, WizardStep, WizardState
-from src.core.disk_manager import DiskManager
+from src.core.disk_manager import DiskManager, DiskInfo, WriteProgress
 from src.core.hardware_detector import HardwareDetector, DetectedHardware, DetectionConfidence
 from src.core.hardware_matcher import HardwareMatcher, ProfileMatch
 from src.core.vendor_database import VendorDatabase
 from src.gui.os_image_manager_qt import OSImageManagerQt
 from src.core.os_image_manager import OSImageInfo, ImageStatus, VerificationMethod, DownloadProgress
 from src.core.config import Config
+from src.core.safety_validator import SafetyValidator, SafetyLevel, ValidationResult, DeviceRisk
+from src.core.usb_builder import USBBuilderEngine, DeploymentRecipe, DeploymentType, HardwareProfile
 
 
 class StepView(QWidget):
@@ -1723,54 +1725,714 @@ class OSImageSelectionStepView(StepView):
             self.download_worker.cancel_downloads()
 
 
+class USBDeviceDetectionWorker(QThread):
+    """Worker thread for USB device detection"""
+    
+    # Signals
+    devices_detected = pyqtSignal(list)  # List of DiskInfo objects
+    detection_failed = pyqtSignal(str)  # Error message
+    
+    def __init__(self):
+        super().__init__()
+        self.disk_manager = DiskManager()
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+    
+    def run(self):
+        """Detect USB devices"""
+        try:
+            self.logger.info("Starting USB device detection...")
+            usb_devices = self.disk_manager.get_removable_devices()
+            self.devices_detected.emit(usb_devices)
+            self.logger.info(f"Detected {len(usb_devices)} USB devices")
+        except Exception as e:
+            self.logger.error(f"USB device detection failed: {e}")
+            self.detection_failed.emit(str(e))
+
+
 class USBConfigurationStepView(StepView):
-    """USB configuration step view"""
+    """Enhanced USB configuration step with comprehensive device management and recipe selection"""
+    
+    # Signals for communication
+    device_safety_checked = pyqtSignal(object)  # DeviceRisk object
+    recipe_compatibility_checked = pyqtSignal(dict)  # Compatibility results
     
     def __init__(self):
         super().__init__(
             "USB Configuration", 
-            "Configure USB drive settings and deployment options."
+            "Select your USB device and configure the deployment recipe for your hardware."
         )
+        
+        # Core components
+        self.disk_manager = DiskManager()
+        self.safety_validator = SafetyValidator(SafetyLevel.STANDARD)
+        self.usb_builder = USBBuilderEngine()
+        
+        # State variables
+        self.detected_hardware = None
+        self.selected_os_image = None
+        self.available_devices = []
+        self.selected_device = None
+        self.selected_recipe = None
+        self.device_risks = {}  # device_path -> DeviceRisk
+        self.recipe_compatibility = {}  # recipe_name -> compatibility_info
+        
+        # UI components (will be created in _setup_content)
+        self.device_list = None
+        self.recipe_cards = {}
+        self.config_panels = {}
+        self.detection_worker = None
+        
         self._setup_content()
     
     def _setup_content(self):
-        """Setup USB configuration content"""
-        # Device selection group
-        device_group = QGroupBox("Target USB Device")
-        device_layout = QVBoxLayout(device_group)
+        """Setup comprehensive USB configuration interface"""
+        # Create main layout with splitter
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.content_layout.addWidget(main_splitter)
         
-        self.device_combo = QComboBox()
-        self.device_combo.addItem("USB Drive - SanDisk 32GB (E:)")
-        self.device_combo.addItem("USB Drive - Kingston 64GB (F:)")
-        self.device_combo.currentTextChanged.connect(self._device_changed)
-        device_layout.addWidget(self.device_combo)
+        # Left panel: Device selection
+        self._setup_device_panel(main_splitter)
         
-        self.content_layout.addWidget(device_group)
+        # Right panel: Recipe configuration
+        self._setup_recipe_panel(main_splitter)
         
-        # Configuration options
-        config_group = QGroupBox("Configuration Options")
-        config_layout = QVBoxLayout(config_group)
+        # Set splitter proportions
+        main_splitter.setSizes([400, 600])
         
-        self.format_checkbox = QCheckBox("Format drive before writing (recommended)")
-        self.format_checkbox.setChecked(True)
-        config_layout.addWidget(self.format_checkbox)
-        
-        self.verify_checkbox = QCheckBox("Verify written data")
-        self.verify_checkbox.setChecked(True)
-        config_layout.addWidget(self.verify_checkbox)
-        
-        self.eject_checkbox = QCheckBox("Safely eject drive when complete")
-        self.eject_checkbox.setChecked(True)
-        config_layout.addWidget(self.eject_checkbox)
-        
-        self.content_layout.addWidget(config_group)
-        
-        # Enable next by default
-        self.set_navigation_enabled(next=True)
+        # Initially disable next until valid configuration
+        self.set_navigation_enabled(next=False)
     
-    def _device_changed(self):
-        """Handle device selection change"""
-        self.step_data_changed.emit({"selected_device": self.device_combo.currentText()})
+    def _setup_device_panel(self, parent):
+        """Setup USB device selection panel"""
+        device_widget = QWidget()
+        device_layout = QVBoxLayout(device_widget)
+        device_layout.setContentsMargins(0, 0, 10, 0)
+        
+        # Header with refresh button
+        header_layout = QHBoxLayout()
+        device_title = QLabel("USB Devices")
+        device_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffffff; margin-bottom: 10px;")
+        header_layout.addWidget(device_title)
+        
+        header_layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
+        
+        self.refresh_devices_button = QPushButton("🔄 Refresh")
+        self.refresh_devices_button.setMinimumSize(80, 30)
+        self.refresh_devices_button.clicked.connect(self._refresh_devices)
+        header_layout.addWidget(self.refresh_devices_button)
+        
+        device_layout.addLayout(header_layout)
+        
+        # Device detection status
+        self.device_status_label = QLabel("Detecting USB devices...")
+        self.device_status_label.setStyleSheet("color: #cccccc; font-size: 14px; margin-bottom: 10px;")
+        device_layout.addWidget(self.device_status_label)
+        
+        # Device list
+        self.device_list = QListWidget()
+        self.device_list.setMinimumHeight(300)
+        self.device_list.setStyleSheet("""
+            QListWidget {
+                background-color: #2b2b2b;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                color: #ffffff;
+            }
+            QListWidget::item {
+                padding: 10px;
+                border-bottom: 1px solid #444444;
+            }
+            QListWidget::item:selected {
+                background-color: #0078d4;
+            }
+            QListWidget::item:hover {
+                background-color: #404040;
+            }
+        """)
+        self.device_list.itemClicked.connect(self._device_selected)
+        device_layout.addWidget(self.device_list)
+        
+        # Device safety information
+        self.safety_info_group = QGroupBox("Device Safety Information")
+        self.safety_info_group.setVisible(False)
+        safety_info_layout = QVBoxLayout(self.safety_info_group)
+        
+        self.safety_status_label = QLabel()
+        self.safety_status_label.setWordWrap(True)
+        self.safety_status_label.setStyleSheet("color: #cccccc; font-size: 13px; padding: 10px;")
+        safety_info_layout.addWidget(self.safety_status_label)
+        
+        device_layout.addWidget(self.safety_info_group)
+        
+        parent.addWidget(device_widget)
+    
+    def _setup_recipe_panel(self, parent):
+        """Setup recipe selection and configuration panel"""
+        recipe_widget = QWidget()
+        recipe_layout = QVBoxLayout(recipe_widget)
+        recipe_layout.setContentsMargins(10, 0, 0, 0)
+        
+        # Recipe selection header
+        recipe_title = QLabel("Deployment Recipe")
+        recipe_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffffff; margin-bottom: 10px;")
+        recipe_layout.addWidget(recipe_title)
+        
+        # Hardware/OS context display
+        self.context_label = QLabel("Select hardware and OS image in previous steps first")
+        self.context_label.setStyleSheet("color: #cccccc; font-size: 14px; margin-bottom: 15px;")
+        self.context_label.setWordWrap(True)
+        recipe_layout.addWidget(self.context_label)
+        
+        # Recipe cards area
+        self.recipe_scroll = QScrollArea()
+        self.recipe_scroll.setWidgetResizable(True)
+        self.recipe_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+        """)
+        
+        self.recipe_container = QWidget()
+        self.recipe_container_layout = QVBoxLayout(self.recipe_container)
+        self.recipe_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.recipe_scroll.setWidget(self.recipe_container)
+        
+        recipe_layout.addWidget(self.recipe_scroll)
+        
+        # Configuration panel for selected recipe
+        self.config_group = QGroupBox("Recipe Configuration")
+        self.config_group.setVisible(False)
+        self.config_layout = QVBoxLayout(self.config_group)
+        recipe_layout.addWidget(self.config_group)
+        
+        parent.addWidget(recipe_widget)
+    
+    def _refresh_devices(self):
+        """Refresh USB device list"""
+        self.logger.info("Refreshing USB devices...")
+        self.device_status_label.setText("🔍 Detecting USB devices...")
+        self.refresh_devices_button.setEnabled(False)
+        
+        # Clear current devices
+        self.device_list.clear()
+        self.available_devices.clear()
+        self.selected_device = None
+        self.safety_info_group.setVisible(False)
+        
+        # Start detection worker
+        if self.detection_worker and self.detection_worker.isRunning():
+            self.detection_worker.quit()
+            self.detection_worker.wait()
+        
+        self.detection_worker = USBDeviceDetectionWorker()
+        self.detection_worker.devices_detected.connect(self._on_devices_detected)
+        self.detection_worker.detection_failed.connect(self._on_detection_failed)
+        self.detection_worker.finished.connect(self._on_detection_finished)
+        self.detection_worker.start()
+    
+    def _on_devices_detected(self, devices: List[DiskInfo]):
+        """Handle detected USB devices"""
+        self.available_devices = devices
+        self.logger.info(f"Detected {len(devices)} USB devices")
+        
+        if not devices:
+            self.device_status_label.setText("⚠️ No USB devices detected. Please connect a USB drive and refresh.")
+            return
+        
+        self.device_status_label.setText(f"✅ Found {len(devices)} USB device(s)")
+        
+        # Populate device list
+        for device in devices:
+            self._add_device_to_list(device)
+    
+    def _add_device_to_list(self, device: DiskInfo):
+        """Add device to the list with safety assessment"""
+        # Perform safety validation
+        device_risk = self.safety_validator.validate_device_safety(device.path)
+        self.device_risks[device.path] = device_risk
+        
+        # Create list item
+        item = QListWidgetItem()
+        
+        # Safety icon
+        safety_icons = {
+            ValidationResult.SAFE: "✅",
+            ValidationResult.WARNING: "⚠️",
+            ValidationResult.DANGEROUS: "🚨",
+            ValidationResult.BLOCKED: "🛑"
+        }
+        safety_icon = safety_icons.get(device_risk.overall_risk, "❓")
+        
+        # Device info
+        size_gb = device.size_bytes / (1024**3)
+        device_text = f"{safety_icon} {device.vendor} {device.model}\\n"
+        device_text += f"    📦 {size_gb:.1f} GB • {device.filesystem} • {device.path}"
+        
+        if device_risk.mount_points:
+            device_text += f"\\n    📁 Mounted: {', '.join(device_risk.mount_points)}"
+        
+        item.setText(device_text)
+        item.setData(Qt.ItemDataRole.UserRole, device)
+        
+        # Color based on safety
+        if device_risk.overall_risk == ValidationResult.BLOCKED:
+            item.setForeground(Qt.GlobalColor.red)
+        elif device_risk.overall_risk == ValidationResult.DANGEROUS:
+            item.setForeground(Qt.GlobalColor.yellow)
+        
+        self.device_list.addItem(item)
+    
+    def _on_detection_failed(self, error_message: str):
+        """Handle detection failure"""
+        self.logger.error(f"Device detection failed: {error_message}")
+        self.device_status_label.setText(f"❌ Detection failed: {error_message}")
+    
+    def _on_detection_finished(self):
+        """Handle detection completion"""
+        self.refresh_devices_button.setEnabled(True)
+        if self.detection_worker:
+            self.detection_worker.deleteLater()
+            self.detection_worker = None
+    
+    def _device_selected(self, item: QListWidgetItem):
+        """Handle device selection"""
+        device = item.data(Qt.ItemDataRole.UserRole)
+        device_risk = self.device_risks.get(device.path)
+        
+        if not device_risk:
+            return
+        
+        # Check if device is blocked
+        if device_risk.overall_risk == ValidationResult.BLOCKED:
+            QMessageBox.warning(
+                self,
+                "Device Blocked",
+                f"This device cannot be used for safety reasons:\\n\\n"
+                f"• {chr(10).join(device_risk.risk_factors)}\\n\\n"
+                f"Please select a different USB device."
+            )
+            return
+        
+        self.selected_device = device
+        self.logger.info(f"Selected device: {device.path} ({device.vendor} {device.model})")
+        
+        # Update safety information display
+        self._update_safety_display(device_risk)
+        
+        # Check recipe compatibility if recipe is selected
+        if self.selected_recipe:
+            self._check_recipe_device_compatibility()
+        
+        # Validate step
+        self._validate_configuration()
+        
+        # Emit data change
+        self.step_data_changed.emit({
+            "selected_device": device,
+            "device_risk": device_risk
+        })
+    
+    def _update_safety_display(self, device_risk: DeviceRisk):
+        """Update safety information display"""
+        self.safety_info_group.setVisible(True)
+        
+        # Safety status
+        status_icons = {
+            ValidationResult.SAFE: "✅ Safe to use",
+            ValidationResult.WARNING: "⚠️ Use with caution",
+            ValidationResult.DANGEROUS: "🚨 High risk",
+            ValidationResult.BLOCKED: "🛑 Blocked"
+        }
+        
+        status_colors = {
+            ValidationResult.SAFE: "#4CAF50",
+            ValidationResult.WARNING: "#FF9800", 
+            ValidationResult.DANGEROUS: "#F44336",
+            ValidationResult.BLOCKED: "#F44336"
+        }
+        
+        status_text = status_icons.get(device_risk.overall_risk, "❓ Unknown")
+        status_color = status_colors.get(device_risk.overall_risk, "#cccccc")
+        
+        safety_info = f"<span style='color: {status_color}; font-weight: bold;'>{status_text}</span><br><br>"
+        
+        # Device details
+        safety_info += f"<b>Device:</b> {device_risk.device_path}<br>"
+        safety_info += f"<b>Size:</b> {device_risk.size_gb:.1f} GB<br>"
+        safety_info += f"<b>Removable:</b> {'Yes' if device_risk.is_removable else 'No'}<br>"
+        
+        if device_risk.mount_points:
+            safety_info += f"<b>Mounted:</b> {', '.join(device_risk.mount_points)}<br>"
+        
+        # Risk factors
+        if device_risk.risk_factors:
+            safety_info += "<br><b>⚠️ Risk Factors:</b><br>"
+            for factor in device_risk.risk_factors:
+                safety_info += f"• {factor}<br>"
+        
+        self.safety_status_label.setText(safety_info)
+    
+    def _load_recipes(self):
+        """Load and display available recipes"""
+        self.logger.info("Loading deployment recipes...")
+        
+        # Clear existing recipe cards
+        for widget in self.recipe_cards.values():
+            widget.deleteLater()
+        self.recipe_cards.clear()
+        
+        # Get available recipes
+        recipes = [
+            DeploymentRecipe.create_macos_oclp_recipe(),
+            DeploymentRecipe.create_windows_unattended_recipe(),
+            DeploymentRecipe.create_linux_automated_recipe()
+        ]
+        
+        # Create recipe cards
+        for recipe in recipes:
+            self._create_recipe_card(recipe)
+    
+    def _create_recipe_card(self, recipe: DeploymentRecipe):
+        """Create a recipe selection card"""
+        card = QFrame()
+        card.setFrameStyle(QFrame.Shape.StyledPanel)
+        card.setStyleSheet("""
+            QFrame {
+                background-color: #2b2b2b;
+                border: 2px solid #444444;
+                border-radius: 8px;
+                margin: 5px;
+                padding: 10px;
+            }
+            QFrame:hover {
+                border-color: #0078d4;
+            }
+        """)
+        card.setMinimumHeight(120)
+        card.mousePressEvent = lambda event, r=recipe: self._select_recipe(r)
+        
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Recipe name and type
+        name_label = QLabel(recipe.name)
+        name_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff;")
+        layout.addWidget(name_label)
+        
+        # Description
+        desc_label = QLabel(recipe.description)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("color: #cccccc; font-size: 12px; margin-top: 5px;")
+        layout.addWidget(desc_label)
+        
+        # Compatibility badge (will be updated based on hardware/OS)
+        compat_label = QLabel("⏳ Checking compatibility...")
+        compat_label.setStyleSheet("color: #888888; font-size: 11px; margin-top: 5px;")
+        layout.addWidget(compat_label)
+        
+        # Store references
+        card.recipe = recipe
+        card.compat_label = compat_label
+        self.recipe_cards[recipe.name] = card
+        
+        self.recipe_container_layout.addWidget(card)
+        
+        # Check compatibility
+        self._check_recipe_compatibility(recipe, compat_label)
+    
+    def _check_recipe_compatibility(self, recipe: DeploymentRecipe, compat_label: QLabel):
+        """Check recipe compatibility with detected hardware and OS"""
+        if not self.detected_hardware or not self.selected_os_image:
+            compat_label.setText("ℹ️ Complete previous steps first")
+            return
+        
+        # This would normally check against actual hardware profiles
+        # For now, we'll do basic platform matching
+        
+        hw_platform = getattr(self.detected_hardware, 'platform', 'unknown').lower()
+        os_platform = getattr(self.selected_os_image, 'platform', 'unknown').lower()
+        
+        recipe_platform_map = {
+            DeploymentType.MACOS_OCLP: 'mac',
+            DeploymentType.WINDOWS_UNATTENDED: 'windows', 
+            DeploymentType.LINUX_AUTOMATED: 'linux'
+        }
+        
+        recipe_platform = recipe_platform_map.get(recipe.deployment_type, 'unknown')
+        
+        # Check compatibility
+        is_compatible = (recipe_platform == hw_platform or recipe_platform == os_platform)
+        
+        if is_compatible:
+            compat_label.setText("✅ Compatible")
+            compat_label.setStyleSheet("color: #4CAF50; font-size: 11px; margin-top: 5px;")
+        else:
+            compat_label.setText("⚠️ May not be compatible")
+            compat_label.setStyleSheet("color: #FF9800; font-size: 11px; margin-top: 5px;")
+        
+        # Store compatibility info
+        self.recipe_compatibility[recipe.name] = {
+            'compatible': is_compatible,
+            'reason': f"Recipe for {recipe_platform}, detected {hw_platform}/{os_platform}"
+        }
+    
+    def _select_recipe(self, recipe: DeploymentRecipe):
+        """Select a deployment recipe"""
+        self.selected_recipe = recipe
+        self.logger.info(f"Selected recipe: {recipe.name}")
+        
+        # Update card selection visual
+        for name, card in self.recipe_cards.items():
+            if name == recipe.name:
+                card.setStyleSheet(card.styleSheet().replace("border: 2px solid #444444", "border: 2px solid #0078d4"))
+            else:
+                card.setStyleSheet(card.styleSheet().replace("border: 2px solid #0078d4", "border: 2px solid #444444"))
+        
+        # Show configuration panel
+        self._show_recipe_configuration(recipe)
+        
+        # Check device compatibility if device is selected
+        if self.selected_device:
+            self._check_recipe_device_compatibility()
+        
+        # Validate step
+        self._validate_configuration()
+        
+        # Emit data change
+        self.step_data_changed.emit({
+            "selected_recipe": recipe
+        })
+    
+    def _show_recipe_configuration(self, recipe: DeploymentRecipe):
+        """Show configuration options for selected recipe"""
+        # Clear existing config
+        for i in reversed(range(self.config_layout.count())):
+            child = self.config_layout.itemAt(i).widget()
+            if child:
+                child.deleteLater()
+        
+        self.config_group.setVisible(True)
+        self.config_group.setTitle(f"Configure: {recipe.name}")
+        
+        # Basic options
+        format_checkbox = QCheckBox("Format device before deployment (recommended)")
+        format_checkbox.setChecked(True)
+        self.config_layout.addWidget(format_checkbox)
+        
+        verify_checkbox = QCheckBox("Verify deployment after completion")
+        verify_checkbox.setChecked(True)
+        self.config_layout.addWidget(verify_checkbox)
+        
+        # Recipe-specific configuration
+        if recipe.deployment_type == DeploymentType.MACOS_OCLP:
+            self._add_macos_oclp_config()
+        elif recipe.deployment_type == DeploymentType.WINDOWS_UNATTENDED:
+            self._add_windows_config()
+        elif recipe.deployment_type == DeploymentType.LINUX_AUTOMATED:
+            self._add_linux_config()
+    
+    def _add_macos_oclp_config(self):
+        """Add macOS OCLP specific configuration"""
+        oclp_group = QGroupBox("OpenCore Legacy Patcher Options")
+        oclp_layout = QVBoxLayout(oclp_group)
+        
+        # OCLP version selection
+        version_layout = QHBoxLayout()
+        version_layout.addWidget(QLabel("OCLP Version:"))
+        version_combo = QComboBox()
+        version_combo.addItems(["Auto-detect latest", "1.4.3", "1.4.2", "1.4.1"])
+        version_layout.addWidget(version_combo)
+        oclp_layout.addLayout(version_layout)
+        
+        # Additional options
+        verbose_checkbox = QCheckBox("Enable verbose boot (for troubleshooting)")
+        oclp_layout.addWidget(verbose_checkbox)
+        
+        sip_checkbox = QCheckBox("Disable System Integrity Protection")
+        oclp_layout.addWidget(sip_checkbox)
+        
+        self.config_layout.addWidget(oclp_group)
+    
+    def _add_windows_config(self):
+        """Add Windows specific configuration"""
+        windows_group = QGroupBox("Windows Installation Options")
+        windows_layout = QVBoxLayout(windows_group)
+        
+        # Edition selection
+        edition_layout = QHBoxLayout()
+        edition_layout.addWidget(QLabel("Windows Edition:"))
+        edition_combo = QComboBox()
+        edition_combo.addItems(["Auto-detect", "Windows 11 Pro", "Windows 11 Home", "Windows 10 Pro"])
+        edition_layout.addWidget(edition_combo)
+        windows_layout.addLayout(edition_layout)
+        
+        # Driver injection
+        driver_checkbox = QCheckBox("Inject hardware-specific drivers")
+        windows_layout.addWidget(driver_checkbox)
+        
+        # Unattended installation
+        unattended_checkbox = QCheckBox("Enable unattended installation")
+        unattended_checkbox.setChecked(True)
+        windows_layout.addWidget(unattended_checkbox)
+        
+        self.config_layout.addWidget(windows_group)
+    
+    def _add_linux_config(self):
+        """Add Linux specific configuration"""
+        linux_group = QGroupBox("Linux Installation Options")
+        linux_layout = QVBoxLayout(linux_group)
+        
+        # Distribution selection
+        distro_layout = QHBoxLayout()
+        distro_layout.addWidget(QLabel("Distribution:"))
+        distro_combo = QComboBox()
+        distro_combo.addItems(["Auto-detect", "Ubuntu 22.04 LTS", "Fedora 39", "Debian 12"])
+        distro_layout.addWidget(distro_combo)
+        linux_layout.addLayout(distro_layout)
+        
+        # Package selection
+        packages_checkbox = QCheckBox("Include development packages")
+        linux_layout.addWidget(packages_checkbox)
+        
+        # Auto-login
+        autologin_checkbox = QCheckBox("Enable automatic login")
+        linux_layout.addWidget(autologin_checkbox)
+        
+        self.config_layout.addWidget(linux_group)
+    
+    def _check_recipe_device_compatibility(self):
+        """Check if selected recipe is compatible with selected device"""
+        if not self.selected_recipe or not self.selected_device:
+            return
+        
+        device_size_gb = self.selected_device.size_bytes / (1024**3)
+        
+        # Check minimum size requirements (simplified)
+        min_sizes = {
+            DeploymentType.MACOS_OCLP: 16.0,  # 16GB minimum
+            DeploymentType.WINDOWS_UNATTENDED: 8.0,  # 8GB minimum
+            DeploymentType.LINUX_AUTOMATED: 4.0  # 4GB minimum
+        }
+        
+        min_required = min_sizes.get(self.selected_recipe.deployment_type, 8.0)
+        
+        if device_size_gb < min_required:
+            QMessageBox.warning(
+                self,
+                "Insufficient Storage",
+                f"The selected USB device ({device_size_gb:.1f} GB) is too small for {self.selected_recipe.name}.\\n\\n"
+                f"Minimum required: {min_required} GB\\n"
+                f"Please select a larger USB device."
+            )
+            return False
+        
+        return True
+    
+    def _validate_configuration(self):
+        """Validate the complete configuration"""
+        is_valid = False
+        
+        if self.selected_device and self.selected_recipe:
+            # Check device safety
+            device_risk = self.device_risks.get(self.selected_device.path)
+            if device_risk and device_risk.overall_risk not in [ValidationResult.BLOCKED]:
+                # Check device capacity
+                if self._check_recipe_device_compatibility():
+                    is_valid = True
+        
+        self.set_navigation_enabled(next=is_valid)
+        
+        if is_valid:
+            self.logger.info("USB configuration validated successfully")
+            self.step_completed.emit()
+    
+    def validate_step(self) -> bool:
+        """Validate step data before proceeding"""
+        if not self.selected_device:
+            QMessageBox.warning(self, "No Device Selected", "Please select a USB device.")
+            return False
+        
+        if not self.selected_recipe:
+            QMessageBox.warning(self, "No Recipe Selected", "Please select a deployment recipe.")
+            return False
+        
+        # Final safety check
+        device_risk = self.device_risks.get(self.selected_device.path)
+        if device_risk and device_risk.overall_risk == ValidationResult.BLOCKED:
+            QMessageBox.critical(self, "Unsafe Device", "The selected device is blocked for safety reasons.")
+            return False
+        
+        return True
+    
+    def get_step_data(self) -> Dict[str, Any]:
+        """Get step configuration data"""
+        data = {
+            "selected_device": self.selected_device,
+            "selected_recipe": self.selected_recipe,
+            "device_risk": self.device_risks.get(self.selected_device.path) if self.selected_device else None,
+            "recipe_compatibility": self.recipe_compatibility.get(self.selected_recipe.name) if self.selected_recipe else None,
+            "available_devices_count": len(self.available_devices)
+        }
+        
+        self.logger.info(f"Exporting USB configuration data: device={self.selected_device.path if self.selected_device else None}, recipe={self.selected_recipe.name if self.selected_recipe else None}")
+        return data
+    
+    def load_step_data(self, data: Dict[str, Any]):
+        """Load step data from wizard state"""
+        self.logger.info(f"Loading USB configuration data: {list(data.keys())}")
+        
+        # Load hardware and OS data for context
+        self.detected_hardware = data.get("detected_hardware")
+        self.selected_os_image = data.get("selected_os_image") or data.get("selected_image")
+        
+        # Update context display
+        self._update_context_display()
+        
+        # Load recipes with compatibility checking
+        self._load_recipes()
+        
+        # Restore previous selections if available
+        if "selected_device" in data:
+            # This would require re-detecting devices to restore selection
+            pass
+        
+        if "selected_recipe" in data:
+            # This would require finding and selecting the recipe
+            pass
+    
+    def _update_context_display(self):
+        """Update the hardware/OS context display"""
+        if self.detected_hardware and self.selected_os_image:
+            hw_info = getattr(self.detected_hardware, 'get_summary', lambda: "Hardware detected")()
+            os_info = getattr(self.selected_os_image, 'name', 'OS image selected')
+            
+            context_text = f"🔧 Hardware: {hw_info}\\n📀 OS Image: {os_info}\\n\\nSelect a compatible deployment recipe:"
+            self.context_label.setText(context_text)
+        elif self.detected_hardware:
+            hw_info = getattr(self.detected_hardware, 'get_summary', lambda: "Hardware detected")()
+            self.context_label.setText(f"🔧 Hardware: {hw_info}\\n⚠️ Please select an OS image first")
+        elif self.selected_os_image:
+            os_info = getattr(self.selected_os_image, 'name', 'OS image selected')
+            self.context_label.setText(f"📀 OS Image: {os_info}\\n⚠️ Please detect hardware first")
+        else:
+            self.context_label.setText("⚠️ Please complete hardware detection and OS selection first")
+    
+    def on_step_entered(self):
+        """Called when step becomes active"""
+        self.logger.info("USB Configuration step entered")
+        
+        # Start device detection automatically
+        QTimer.singleShot(500, self._refresh_devices)
+    
+    def on_step_left(self):
+        """Called when leaving step"""
+        self.logger.info("USB Configuration step exited")
+        
+        # Clean up detection worker
+        if self.detection_worker and self.detection_worker.isRunning():
+            self.detection_worker.quit()
+            self.detection_worker.wait()
 
 
 class SafetyReviewStepView(StepView):

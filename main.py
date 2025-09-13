@@ -21,6 +21,7 @@ def main():
             from src.gui.main_window import BootForgeMainWindow
             from src.core.config import Config
             from src.core.logger import setup_logging
+            from src.gui.modern_theme import BootForgeTheme
             from PyQt6.QtWidgets import QApplication
             from PyQt6.QtCore import Qt
             
@@ -37,6 +38,9 @@ def main():
             app.setApplicationName("BootForge")
             app.setApplicationVersion("1.0.0")
             app.setOrganizationName("BootForge")
+            
+            # Apply modern theme globally
+            BootForgeTheme.apply_theme(app)
             
             # Setup logging
             setup_logging()

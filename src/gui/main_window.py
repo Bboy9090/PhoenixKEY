@@ -25,6 +25,8 @@ from src.gui.status_widget import StatusWidget
 from src.gui.log_viewer import LogViewer
 from src.gui.usb_recipe_manager import USBRecipeManagerWidget
 from src.gui.stepper_wizard_widget import BootForgeStepperWizard
+from src.gui.icon_manager import icon_manager
+from src.gui.modern_theme import BootForgeTheme
 
 
 class BootForgeMainWindow(QMainWindow):
@@ -93,8 +95,8 @@ class BootForgeMainWindow(QMainWindow):
         # Create status bar
         self._create_status_bar()
         
-        # Apply dark theme
-        self._apply_theme()
+        # Apply modern theme
+        self._apply_modern_theme()
     
     def _create_left_panel(self) -> QWidget:
         """Create the left panel with stepper wizard interface"""
@@ -249,117 +251,16 @@ class BootForgeMainWindow(QMainWindow):
     
     def _create_app_icon(self) -> QIcon:
         """Create application icon"""
-        # Create a simple icon for now
-        # In a real application, you'd load from a file
-        icon = QIcon()
-        return icon
+        return icon_manager.get_icon("app", 48)
     
     def _create_icon(self, name: str) -> QIcon:
         """Create toolbar icons"""
-        # Placeholder icon creation
-        # In a real application, you'd load from icon files
-        icon = QIcon()
-        return icon
+        return icon_manager.get_icon(name, 24)
     
-    def _apply_theme(self):
-        """Apply dark theme styling"""
-        style = """
-        QMainWindow {
-            background-color: #2b2b2b;
-            color: #ffffff;
-        }
-        
-        QMenuBar {
-            background-color: #3c3c3c;
-            color: #ffffff;
-            border-bottom: 1px solid #555555;
-        }
-        
-        QMenuBar::item {
-            background-color: transparent;
-            padding: 4px 8px;
-        }
-        
-        QMenuBar::item:selected {
-            background-color: #555555;
-        }
-        
-        QToolBar {
-            background-color: #3c3c3c;
-            border: none;
-            spacing: 2px;
-        }
-        
-        QStatusBar {
-            background-color: #3c3c3c;
-            border-top: 1px solid #555555;
-        }
-        
-        QTabWidget::pane {
-            border: 1px solid #555555;
-            background-color: #2b2b2b;
-        }
-        
-        QTabBar::tab {
-            background-color: #3c3c3c;
-            color: #ffffff;
-            padding: 8px 16px;
-            margin-right: 2px;
-        }
-        
-        QTabBar::tab:selected {
-            background-color: #555555;
-        }
-        
-        QGroupBox {
-            font-weight: bold;
-            border: 2px solid #555555;
-            border-radius: 5px;
-            margin-top: 1ex;
-            color: #ffffff;
-        }
-        
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 5px 0 5px;
-        }
-        
-        QPushButton {
-            background-color: #4a4a4a;
-            border: 1px solid #666666;
-            padding: 8px 16px;
-            border-radius: 4px;
-            color: #ffffff;
-        }
-        
-        QPushButton:hover {
-            background-color: #555555;
-        }
-        
-        QPushButton:pressed {
-            background-color: #333333;
-        }
-        
-        QPushButton:disabled {
-            background-color: #2a2a2a;
-            color: #666666;
-        }
-        
-        QProgressBar {
-            border: 1px solid #555555;
-            border-radius: 4px;
-            text-align: center;
-            color: #ffffff;
-        }
-        
-        QProgressBar::chunk {
-            background-color: #0078d4;
-            border-radius: 3px;
-        }
-        """
-        
-        self.setStyleSheet(style)
+    def _apply_modern_theme(self):
+        """Apply modern professional theme styling"""
+        # Apply the modern theme to the main window
+        self.setStyleSheet(BootForgeTheme.get_stylesheet())
     
     def _setup_connections(self):
         """Setup signal connections"""

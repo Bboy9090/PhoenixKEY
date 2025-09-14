@@ -8,6 +8,7 @@ import sys
 import platform
 import subprocess
 import shutil
+import traceback
 from pathlib import Path
 import importlib.util
 from typing import Optional, List, Tuple
@@ -205,7 +206,7 @@ def build_executable() -> bool:
             '--hidden-import=src.core',
             '--hidden-import=src.plugins',
             '--hidden-import=src.cli',
-            '--console',  # Console application
+            '--windowed',  # GUI application (no console)
             'main.py'
         ])
         
@@ -356,6 +357,72 @@ Support: https://bootforge.dev
     print(f"✅ Windows ZIP package created: {zip_path}")
     return True
 
+def sign_windows_executable(executable_path: Path) -> bool:
+    """Sign Windows executable with Authenticode"""
+    cert_path = os.environ.get('WIN_CERT_PATH')
+    cert_password = os.environ.get('WIN_CERT_PASS')
+    
+    if not cert_path or not cert_password:
+        print("⚠️  Windows code signing skipped - WIN_CERT_PATH or WIN_CERT_PASS not set")
+        print("   Set these environment variables to enable Authenticode signing:")
+        print("   - WIN_CERT_PATH: Path to your .p12/.pfx certificate file")
+        print("   - WIN_CERT_PASS: Certificate password")
+        return False
+    
+    if not Path(cert_path).exists():
+        print(f"❌ Certificate file not found: {cert_path}")
+        return False
+    
+    print("🔐 Signing Windows executable with Authenticode...")
+    
+    # Sign with multiple timestamps for better reliability
+    timestamp_urls = [
+        "http://timestamp.digicert.com",
+        "http://timestamp.sectigo.com",
+        "http://timestamp.globalsign.com"
+    ]
+    
+    for i, timestamp_url in enumerate(timestamp_urls):
+        try:
+            cmd = [
+                'signtool', 'sign',
+                '/f', cert_path,
+                '/p', cert_password,
+                '/t', timestamp_url,
+                '/fd', 'SHA256',
+                '/v',
+                str(executable_path)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            
+            if result.returncode == 0:
+                print(f"✅ Successfully signed with timestamp server {i+1}")
+                
+                # Verify the signature
+                verify_cmd = ['signtool', 'verify', '/pa', '/v', str(executable_path)]
+                verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+                
+                if verify_result.returncode == 0:
+                    print("✅ Signature verification successful")
+                    return True
+                else:
+                    print(f"⚠️  Signature verification failed: {verify_result.stderr}")
+            else:
+                print(f"⚠️  Signing failed with timestamp server {i+1}: {result.stderr}")
+                
+        except subprocess.TimeoutExpired:
+            print(f"⚠️  Signing timed out with timestamp server {i+1}")
+        except FileNotFoundError:
+            print("❌ signtool not found - Windows SDK required for code signing")
+            return False
+        except Exception as e:
+            print(f"⚠️  Error with timestamp server {i+1}: {e}")
+    
+    print("❌ All timestamp servers failed - executable will be unsigned")
+    return False
+
+
 def create_windows_installer():
     """Create Windows installer with Inno Setup or ZIP fallback"""
     print("Creating Windows installer...")
@@ -366,34 +433,8 @@ def create_windows_installer():
         print("❌ Could not find Windows executable")
         return False
     
-    # Prepare for Authenticode signing (structure only)
-    print("📝 Preparing Authenticode signing structure...")
-    
-    sign_script = Path("dist/windows/sign_exe.bat")
-    sign_script.parent.mkdir(parents=True, exist_ok=True)
-    sign_script_content = f"""@echo off
-REM Windows Executable Signing Script
-REM Run this script after obtaining a Code Signing Certificate
-
-set EXE_PATH={executable}
-set CERT_PATH=path\\to\\your\\certificate.p12
-set TIMESTAMP_URL=http://timestamp.digicert.com
-
-echo 🔐 Signing Windows executable...
-
-REM Sign the executable with timestamp
-signtool sign /f "%CERT_PATH%" /p YOUR_CERT_PASSWORD /t "%TIMESTAMP_URL%" /fd SHA256 /v "%EXE_PATH%"
-
-REM Verify the signature
-echo ✅ Verifying signature...
-signtool verify /pa /v "%EXE_PATH%"
-
-echo ✅ Signed executable ready for distribution
-pause
-"""
-    
-    sign_script.write_text(sign_script_content)
-    print(f"✅ Code signing script created: {sign_script}")
+    # Sign the executable first
+    sign_windows_executable(executable)
     
     # Try Inno Setup installer first
     iss_content = f"""[Setup]
@@ -410,6 +451,8 @@ OutputDir=dist\\windows
 OutputBaseFilename=BootForge-Setup
 WizardStyle=modern
 DisableWelcomePage=no
+PrivilegesRequired=admin
+SetupIconFile=assets\\icons\\app_icon_premium.png
 
 [Files]
 Source: "{executable}"; DestDir: "{{app}}"; Flags: ignoreversion
@@ -418,12 +461,23 @@ Source: "assets\\*"; DestDir: "{{app}}\\assets"; Flags: ignoreversion recursesub
 Source: "docs\\*"; DestDir: "{{app}}\\docs"; Flags: ignoreversion recursesubdirs external skipifnotexists
 
 [Icons]
-Name: "{{group}}\\BootForge"; Filename: "{{app}}\\{executable.name}"
+Name: "{{group}}\\BootForge"; Filename: "{{app}}\\{executable.name}"; WorkingDir: "{{app}}"
 Name: "{{group}}\\Uninstall BootForge"; Filename: "{{uninstallexe}}"
-Name: "{{commondesktop}}\\BootForge"; Filename: "{{app}}\\{executable.name}"; Tasks: desktopicon
+Name: "{{commondesktop}}\\BootForge"; Filename: "{{app}}\\{executable.name}"; WorkingDir: "{{app}}"; Tasks: desktopicon
+Name: "{{commonstartup}}\\BootForge"; Filename: "{{app}}\\{executable.name}"; WorkingDir: "{{app}}"; Tasks: startupicon
 
 [Tasks]
 Name: desktopicon; Description: "Create a desktop icon"; GroupDescription: "Additional icons:"; Flags: unchecked
+Name: startupicon; Description: "Run BootForge at Windows startup"; GroupDescription: "Additional options:"; Flags: unchecked
+
+[Registry]
+Root: HKCR; Subkey: ".iso"; ValueType: string; ValueName: ""; ValueData: "BootForge.ISOFile"; Flags: uninsdeletevalue; Tasks: associateiso
+Root: HKCR; Subkey: "BootForge.ISOFile"; ValueType: string; ValueName: ""; ValueData: "ISO Disk Image"; Flags: uninsdeletekey; Tasks: associateiso
+Root: HKCR; Subkey: "BootForge.ISOFile\\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{{app}}\\{executable.name},0"; Tasks: associateiso
+Root: HKCR; Subkey: "BootForge.ISOFile\\shell\\open\\command"; ValueType: string; ValueName: ""; ValueData: "\\"{{app}}\\{executable.name}\\" \\"%1\\""; Tasks: associateiso
+
+[Tasks]
+Name: associateiso; Description: "Associate BootForge with ISO files"; GroupDescription: "File associations:"; Flags: unchecked
 
 [Run]
 Filename: "{{app}}\\{executable.name}"; Description: "Launch BootForge"; Flags: nowait postinstall skipifsilent
@@ -438,14 +492,22 @@ Filename: "{{app}}\\{executable.name}"; Description: "Launch BootForge"; Flags: 
         result = subprocess.run(['iscc', 'BootForge.iss'], capture_output=True, text=True)
         if result.returncode == 0:
             print("✅ Windows installer created")
+            
+            # Sign the installer if signing credentials are available
+            installer_path = Path("dist/windows/BootForge-Setup.exe")
+            if installer_path.exists():
+                sign_windows_executable(installer_path)
+            
             # Also create ZIP package as alternative
             create_windows_zip_package()
             return True
         else:
             print(f"❌ Installer creation failed: {result.stderr}")
+            print("🔄 Creating ZIP package fallback...")
             return create_windows_zip_package()
     except FileNotFoundError:
         print("⚠️  Inno Setup not found - creating ZIP fallback")
+        print("   Install Inno Setup from: https://jrsoftware.org/isdl.php")
         return create_windows_zip_package()
 
 
@@ -474,6 +536,191 @@ def find_macos_executable() -> Optional[Path]:
             return candidate_path
     
     return None
+
+def convert_png_to_icns(png_path: Path, icns_path: Path) -> bool:
+    """Convert PNG to ICNS format for macOS app icons"""
+    try:
+        # Create iconset directory
+        iconset_dir = icns_path.parent / f"{icns_path.stem}.iconset"
+        if iconset_dir.exists():
+            shutil.rmtree(iconset_dir)
+        iconset_dir.mkdir(parents=True)
+        
+        # Create different icon sizes using sips
+        icon_sizes = [
+            (16, "icon_16x16.png"),
+            (32, "icon_16x16@2x.png"),
+            (32, "icon_32x32.png"),
+            (64, "icon_32x32@2x.png"),
+            (128, "icon_128x128.png"),
+            (256, "icon_128x128@2x.png"),
+            (256, "icon_256x256.png"),
+            (512, "icon_256x256@2x.png"),
+            (512, "icon_512x512.png"),
+            (1024, "icon_512x512@2x.png")
+        ]
+        
+        for size, filename in icon_sizes:
+            result = subprocess.run([
+                'sips', '-z', str(size), str(size),
+                str(png_path), '--out', str(iconset_dir / filename)
+            ], capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                print(f"⚠️  Failed to create {filename}: {result.stderr}")
+        
+        # Convert iconset to icns
+        result = subprocess.run([
+            'iconutil', '-c', 'icns', str(iconset_dir), '-o', str(icns_path)
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            # Clean up iconset directory
+            shutil.rmtree(iconset_dir)
+            print(f"✅ Created ICNS icon: {icns_path}")
+            return True
+        else:
+            print(f"❌ Failed to create ICNS: {result.stderr}")
+            return False
+            
+    except FileNotFoundError:
+        print("⚠️  sips or iconutil not found - keeping PNG icon")
+        # Fallback: just copy PNG as is
+        shutil.copy2(png_path, icns_path.parent / "AppIcon.png")
+        return False
+    except Exception as e:
+        print(f"❌ Icon conversion failed: {e}")
+        return False
+
+
+def sign_macos_app(app_path: Path) -> bool:
+    """Sign macOS app bundle with Developer ID"""
+    sign_id = os.environ.get('MACOS_SIGN_ID')
+    
+    if not sign_id:
+        print("⚠️  macOS code signing skipped - MACOS_SIGN_ID not set")
+        print("   Set this environment variable to enable code signing:")
+        print("   - MACOS_SIGN_ID: Your Developer ID (e.g., 'Developer ID Application: Your Name (XXXXXXXXXX)')")
+        return False
+    
+    print("🔐 Signing macOS app bundle...")
+    
+    try:
+        # Sign all frameworks and executables first
+        for root, dirs, files in os.walk(app_path):
+            for file in files:
+                file_path = Path(root) / file
+                if (file_path.suffix in ['.dylib', '.so'] or 
+                    (file_path.stat().st_mode & 0o111) and file_path.is_file()):
+                    
+                    result = subprocess.run([
+                        'codesign', '--force', '--options', 'runtime',
+                        '--sign', sign_id, str(file_path)
+                    ], capture_output=True, text=True)
+                    
+                    if result.returncode != 0:
+                        print(f"⚠️  Warning: Failed to sign {file_path}: {result.stderr}")
+        
+        # Sign the main app bundle
+        cmd = [
+            'codesign', '--force', '--options', 'runtime',
+            '--sign', sign_id, '--deep', str(app_path)
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("✅ App bundle signed successfully")
+            
+            # Verify signature
+            verify_cmd = ['codesign', '--verify', '--deep', '--strict', '--verbose=2', str(app_path)]
+            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+            
+            if verify_result.returncode == 0:
+                print("✅ Signature verification successful")
+                return True
+            else:
+                print(f"❌ Signature verification failed: {verify_result.stderr}")
+                return False
+        else:
+            print(f"❌ Code signing failed: {result.stderr}")
+            return False
+            
+    except FileNotFoundError:
+        print("❌ codesign not found - Xcode Command Line Tools required")
+        return False
+    except Exception as e:
+        print(f"❌ Code signing error: {e}")
+        return False
+
+
+def notarize_macos_app(app_path: Path) -> bool:
+    """Notarize macOS app with Apple"""
+    apple_id = os.environ.get('APPLE_ID')
+    app_password = os.environ.get('APPLE_APP_PASSWORD')
+    team_id = os.environ.get('APPLE_TEAM_ID')
+    
+    if not all([apple_id, app_password, team_id]):
+        print("⚠️  macOS notarization skipped - missing credentials")
+        print("   Set these environment variables for notarization:")
+        print("   - APPLE_ID: Your Apple ID email")
+        print("   - APPLE_APP_PASSWORD: App-specific password")
+        print("   - APPLE_TEAM_ID: Your Apple Developer Team ID")
+        return False
+    
+    print("📤 Submitting app for notarization...")
+    
+    try:
+        # Create ZIP for notarization
+        zip_path = app_path.parent / f"{app_path.stem}.zip"
+        result = subprocess.run([
+            'ditto', '-c', '-k', '--keepParent', str(app_path), str(zip_path)
+        ], capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"❌ Failed to create ZIP: {result.stderr}")
+            return False
+        
+        # Submit for notarization using notarytool (Xcode 13+)
+        cmd = [
+            'xcrun', 'notarytool', 'submit', str(zip_path),
+            '--apple-id', apple_id,
+            '--password', app_password,
+            '--team-id', team_id,
+            '--wait'
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("✅ Notarization successful")
+            
+            # Staple the notarization ticket
+            staple_cmd = ['xcrun', 'stapler', 'staple', str(app_path)]
+            staple_result = subprocess.run(staple_cmd, capture_output=True, text=True)
+            
+            if staple_result.returncode == 0:
+                print("✅ Notarization ticket stapled")
+                
+                # Clean up ZIP
+                zip_path.unlink()
+                return True
+            else:
+                print(f"⚠️  Stapling failed: {staple_result.stderr}")
+                zip_path.unlink()
+                return True  # Notarization succeeded even if stapling failed
+        else:
+            print(f"❌ Notarization failed: {result.stderr}")
+            zip_path.unlink()
+            return False
+            
+    except FileNotFoundError:
+        print("❌ notarytool not found - Xcode 13+ required for notarization")
+        return False
+    except Exception as e:
+        print(f"❌ Notarization error: {e}")
+        return False
+
 
 def create_macos_installer():
     """Create macOS installer"""
@@ -507,6 +754,7 @@ def create_macos_installer():
         
         # Copy executable
         shutil.copy2(macos_executable, app_dir / "Contents/MacOS/BootForge")
+        (app_dir / "Contents/MacOS/BootForge").chmod(0o755)
         
         # Create Info.plist
         plist_content = """<?xml version="1.0" encoding="UTF-8"?>
@@ -528,17 +776,19 @@ def create_macos_installer():
     <key>LSMinimumSystemVersion</key>
     <string>10.15</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
+    <string>AppIcon.icns</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.utilities</string>
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
 </dict>
 </plist>"""
         
         (app_dir / "Contents/Info.plist").write_text(plist_content)
         
-        # Copy icon if available
+        # Find and convert icon
         icon_paths = [
             Path("assets/icons/app_icon_premium.png"),
             Path("assets/icons/BootForge_App_Icon_1685d1e8.png"),
@@ -547,58 +797,43 @@ def create_macos_installer():
         
         for icon_path in icon_paths:
             if icon_path.exists():
-                # Convert PNG to ICNS if needed (or just copy as is)
-                shutil.copy2(icon_path, app_dir / "Contents/Resources/AppIcon.png")
-                print(f"✅ Added app icon from {icon_path}")
+                icns_path = app_dir / "Contents/Resources/AppIcon.icns"
+                if convert_png_to_icns(icon_path, icns_path):
+                    print(f"✅ Converted icon from {icon_path}")
+                else:
+                    # Fallback to PNG
+                    shutil.copy2(icon_path, app_dir / "Contents/Resources/AppIcon.png")
+                    print(f"✅ Added PNG icon from {icon_path}")
                 break
         else:
             print("⚠️  No app icon found, using default")
         
         print(f"✅ Created .app bundle at {app_dir}")
     
-    # Prepare for code signing (structure only)
-    print("📝 Preparing code signing structure...")
+    # Sign the app bundle
+    signed = sign_macos_app(app_dir)
     
-    # Create a simple script that could be used for signing later
-    sign_script = app_dir.parent / "sign_app.sh"
-    sign_script_content = f"""#!/bin/bash
-# macOS App Signing Script
-# Run this script after obtaining a Developer Certificate
-
-APP_PATH="{app_dir}"
-DEVELOPER_ID="Developer ID Application: Your Name (XXXXXXXXXX)"  # Replace with actual ID
-
-echo "🔐 Signing BootForge.app..."
-
-# Sign the app bundle
-codesign --force --options runtime --sign "$DEVELOPER_ID" "$APP_PATH"
-
-# Verify the signature
-echo "✅ Verifying signature..."
-codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-
-echo "📦 Creating signed DMG..."
-hdiutil create -volname "BootForge" -srcfolder "$(dirname "$APP_PATH")" -ov -format UDZO "../BootForge-Signed.dmg"
-
-echo "✅ Signed app and DMG ready for distribution"
-echo "📝 Next step: Submit DMG to Apple for notarization"
-"""
-    
-    sign_script.write_text(sign_script_content)
-    sign_script.chmod(0o755)
-    print(f"✅ Code signing script created: {sign_script}")
+    # Notarize if signed
+    if signed:
+        notarize_macos_app(app_dir)
     
     # Create DMG
     try:
+        dmg_path = Path("dist/BootForge-1.0.0.dmg")
         result = subprocess.run([
             'hdiutil', 'create', '-volname', 'BootForge',
             '-srcfolder', str(app_dir.parent),
             '-ov', '-format', 'UDZO',
-            'dist/BootForge-1.0.0.dmg'
+            str(dmg_path)
         ], capture_output=True, text=True)
         
         if result.returncode == 0:
             print("✅ macOS DMG created")
+            
+            # Sign the DMG if we have signing credentials
+            if signed:
+                sign_windows_executable(dmg_path)  # Reuse Windows signing function for DMG
+            
             return True
         else:
             print(f"❌ DMG creation failed: {result.stderr}")
@@ -691,6 +926,149 @@ Support: https://bootforge.dev
     print(f"✅ Linux tarball created: {tar_path}")
     return True
 
+def deploy_qt_dependencies(appdir: Path, executable_path: Path) -> bool:
+    """Deploy Qt dependencies for AppImage using linuxdeploy-qt"""
+    try:
+        # Check if PyQt6 is being used
+        import PyQt6
+        qt_version = "6"
+        print(f"🔍 Detected PyQt{qt_version}")
+    except ImportError:
+        try:
+            import PyQt5
+            qt_version = "5"
+            print(f"🔍 Detected PyQt{qt_version}")
+        except ImportError:
+            print("⚠️  No Qt libraries detected - skipping Qt deployment")
+            return True
+    
+    # Try linuxdeploy-qt first
+    try:
+        print("📦 Deploying Qt dependencies with linuxdeploy-qt...")
+        
+        env = os.environ.copy()
+        env['QMAKE'] = shutil.which('qmake') or f'qmake-qt{qt_version}'
+        
+        cmd = [
+            'linuxdeploy-qt', 
+            '--executable', str(executable_path),
+            '--appdir', str(appdir),
+            '--output', 'appimage'
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        
+        if result.returncode == 0:
+            print("✅ Qt dependencies deployed successfully")
+            return True
+        else:
+            print(f"⚠️  linuxdeploy-qt failed: {result.stderr}")
+            
+    except FileNotFoundError:
+        print("⚠️  linuxdeploy-qt not found")
+    
+    # Fallback: try to manually copy Qt libraries
+    print("🔄 Attempting manual Qt library deployment...")
+    
+    try:
+        # Find Qt installation
+        qt_libs = []
+        search_paths = [
+            f"/usr/lib/x86_64-linux-gnu/qt{qt_version}",
+            f"/usr/lib/qt{qt_version}",
+            f"/opt/qt{qt_version}",
+            "/usr/lib/x86_64-linux-gnu",
+            "/usr/lib"
+        ]
+        
+        lib_dir = appdir / "lib"
+        lib_dir.mkdir(exist_ok=True)
+        
+        # Essential Qt libraries for GUI apps
+        essential_libs = [
+            f"libQt{qt_version}Core.so*",
+            f"libQt{qt_version}Gui.so*", 
+            f"libQt{qt_version}Widgets.so*",
+            f"libQt{qt_version}DBus.so*",
+            f"libQt{qt_version}XcbQpa.so*"
+        ]
+        
+        for search_path in search_paths:
+            search_dir = Path(search_path)
+            if search_dir.exists():
+                for lib_pattern in essential_libs:
+                    for lib_file in search_dir.glob(lib_pattern):
+                        if lib_file.is_file():
+                            dest = lib_dir / lib_file.name
+                            if not dest.exists():
+                                shutil.copy2(lib_file, dest)
+                                print(f"   📄 Copied {lib_file.name}")
+                                qt_libs.append(lib_file.name)
+        
+        if qt_libs:
+            print(f"✅ Deployed {len(qt_libs)} Qt libraries manually")
+            return True
+        else:
+            print("⚠️  No Qt libraries found for manual deployment")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Manual Qt deployment failed: {e}")
+        return False
+
+
+def create_enhanced_apprun(appdir: Path, executable_name: str) -> None:
+    """Create enhanced AppRun script with better library handling"""
+    apprun_content = f"""#!/bin/bash
+# BootForge AppImage Launcher with Qt Support
+set -e
+
+HERE="$(dirname "$(readlink -f "${{0}}")")"
+export APPDIR="$HERE"
+
+# Set up library paths
+if [ -d "$HERE/lib" ]; then
+    export LD_LIBRARY_PATH="$HERE/lib:${{LD_LIBRARY_PATH}}"
+fi
+
+if [ -d "$HERE/usr/lib" ]; then
+    export LD_LIBRARY_PATH="$HERE/usr/lib:${{LD_LIBRARY_PATH}}"
+fi
+
+# Set up Qt plugin paths  
+if [ -d "$HERE/usr/plugins" ]; then
+    export QT_PLUGIN_PATH="$HERE/usr/plugins:${{QT_PLUGIN_PATH}}"
+fi
+
+if [ -d "$HERE/plugins" ]; then
+    export QT_PLUGIN_PATH="$HERE/plugins:${{QT_PLUGIN_PATH}}"
+fi
+
+# Disable Qt's xcb plugin warnings in AppImage environment
+export QT_LOGGING_RULES="qt.qpa.xcb.warning=false"
+
+# Change to app directory
+cd "$HERE"
+
+# Check if executable exists
+if [ ! -f "./{executable_name}" ]; then
+    echo "Error: {executable_name} executable not found"
+    exit 1
+fi
+
+# Make sure it's executable
+chmod +x "./{executable_name}"
+
+# Launch with all arguments
+exec "./{executable_name}" "$@"
+"""
+    
+    apprun_file = appdir / "AppRun"
+    apprun_file.write_text(apprun_content)
+    apprun_file.chmod(0o755)
+    print("✅ Created enhanced AppRun script with Qt support")
+
+
 def create_linux_package():
     """Create Linux package (AppImage with fallback)"""
     print("Creating Linux package...")
@@ -718,6 +1096,9 @@ def create_linux_package():
     shutil.copy2(executable_path, appdir / "BootForge")
     (appdir / "BootForge").chmod(0o755)
     
+    # Deploy Qt dependencies if needed
+    deploy_qt_dependencies(appdir, appdir / "BootForge")
+    
     # Find and copy icon
     icon_paths = [
         Path("assets/icons/app_icon_premium.png"),
@@ -734,7 +1115,7 @@ def create_linux_package():
             break
     
     # Create enhanced desktop file
-    desktop_content = f"""[Desktop Entry]
+    desktop_content = """[Desktop Entry]
 Version=1.0
 Type=Application
 Name=BootForge
@@ -751,30 +1132,8 @@ X-AppImage-Version=1.0.0
     
     (appdir / "BootForge.desktop").write_text(desktop_content)
     
-    # Create AppRun script with better error handling
-    apprun_content = """#!/bin/bash
-# BootForge AppImage Launcher
-set -e
-
-HERE="$(dirname "$(readlink -f "${0}")")" 
-cd "$HERE"
-
-# Check if we can run
-if [ ! -f "./BootForge" ]; then
-    echo "Error: BootForge executable not found"
-    exit 1
-fi
-
-# Make sure it's executable
-chmod +x "./BootForge"
-
-# Launch with all arguments
-exec "./BootForge" "$@"
-"""
-    
-    apprun_file = appdir / "AppRun"
-    apprun_file.write_text(apprun_content)
-    apprun_file.chmod(0o755)
+    # Create enhanced AppRun script
+    create_enhanced_apprun(appdir, "BootForge")
     
     # Copy the icon as the main icon (required by AppImage)
     if icon_file and icon_file != appdir / "bootforge.png":
@@ -815,25 +1174,54 @@ exec "./BootForge" "$@"
     metainfo_dir.mkdir(parents=True, exist_ok=True)
     (metainfo_dir / "dev.bootforge.BootForge.appdata.xml").write_text(appdata_content)
     
-    # Try to create AppImage
+    # Try appimagetool first, then linuxdeploy, then fallback
+    appimage_created = False
+    
+    # Method 1: Try appimagetool
     try:
-        print("🔨 Building AppImage...")
+        print("🔨 Building AppImage with appimagetool...")
         result = subprocess.run([
-            'appimagetool', '--no-appstream',  # Skip appstream validation for now
+            'appimagetool', '--no-appstream',
             str(appdir), 'dist/linux/BootForge-1.0.0-x86_64.AppImage'
         ], capture_output=True, text=True)
         
         if result.returncode == 0:
-            print("✅ Linux AppImage created")
-            # Also create tarball as fallback
-            create_linux_tarball()
-            return True
+            print("✅ AppImage created with appimagetool")
+            appimage_created = True
         else:
-            print(f"⚠️  AppImage creation had issues: {result.stderr}")
-            print("🔄 Creating tarball fallback...")
-            return create_linux_tarball()
+            print(f"⚠️  appimagetool failed: {result.stderr}")
+            
     except FileNotFoundError:
-        print("⚠️  appimagetool not found - creating tarball fallback")
+        print("⚠️  appimagetool not found")
+    
+    # Method 2: Try linuxdeploy if appimagetool failed
+    if not appimage_created:
+        try:
+            print("🔨 Building AppImage with linuxdeploy...")
+            result = subprocess.run([
+                'linuxdeploy', '--appdir', str(appdir),
+                '--output', 'appimage',
+                '--desktop-file', str(appdir / "BootForge.desktop")
+            ], capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print("✅ AppImage created with linuxdeploy")
+                appimage_created = True
+            else:
+                print(f"⚠️  linuxdeploy failed: {result.stderr}")
+                
+        except FileNotFoundError:
+            print("⚠️  linuxdeploy not found")
+    
+    if appimage_created:
+        # Also create tarball as alternative
+        create_linux_tarball()
+        return True
+    else:
+        print("🔄 AppImage tools not available - creating tarball fallback")
+        print("   Install AppImage tools for better Linux packaging:")
+        print("   • appimagetool: https://github.com/AppImage/AppImageKit")
+        print("   • linuxdeploy: https://github.com/linuxdeploy/linuxdeploy")
         return create_linux_tarball()
 
 

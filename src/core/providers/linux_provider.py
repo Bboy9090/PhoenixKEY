@@ -21,7 +21,7 @@ from src.core.config import Config
 
 
 class LinuxProvider(OSImageProvider):
-    """Provider for Linux distributions, supporting Ubuntu LTS and Kali Linux releases"""
+    """Provider for Linux distributions, supporting Ubuntu LTS, Kali Linux, and Parrot OS releases"""
     
     # Ubuntu LTS release information
     UBUNTU_LTS_RELEASES = {
@@ -109,12 +109,83 @@ class LinuxProvider(OSImageProvider):
         }
     }
     
+    # Parrot OS release information
+    PARROT_RELEASES = {
+        "6.4": {
+            "name": "Parrot OS 6.4",
+            "codename": "lts",
+            "release_date": "2025-02-15",
+            "type": "stable"
+        },
+        "6.3": {
+            "name": "Parrot OS 6.3",
+            "codename": "lts",
+            "release_date": "2025-01-31",
+            "type": "stable"
+        },
+        "6.1": {
+            "name": "Parrot OS 6.1",
+            "codename": "lts",
+            "release_date": "2024-06-05",
+            "type": "stable"
+        },
+        "6.0": {
+            "name": "Parrot OS 6.0",
+            "codename": "lts",
+            "release_date": "2024-01-24",
+            "type": "stable"
+        },
+        "5.3": {
+            "name": "Parrot OS 5.3",
+            "codename": "electro ara",
+            "release_date": "2023-07-19",
+            "type": "stable"
+        },
+        "5.2": {
+            "name": "Parrot OS 5.2",
+            "codename": "electro ara",
+            "release_date": "2023-02-15",
+            "type": "stable"
+        }
+    }
+    
+    # Parrot OS editions and their use cases
+    PARROT_EDITIONS = {
+        "security": {
+            "name": "Security",
+            "description": "Full penetration testing environment with 600+ security tools",
+            "use_case": "security_testing",
+            "toolset": "full"
+        },
+        "home": {
+            "name": "Home",
+            "description": "Privacy-focused daily use without security tools",
+            "use_case": "privacy",
+            "toolset": "minimal"
+        },
+        "architect": {
+            "name": "Architect",
+            "description": "Minimal base for custom installation (~379MB)",
+            "use_case": "custom_install",
+            "toolset": "minimal"
+        },
+        "cloud": {
+            "name": "Cloud/IoT",
+            "description": "Optimized for virtual machines and embedded devices",
+            "use_case": "cloud_iot",
+            "toolset": "minimal"
+        }
+    }
+    
     UBUNTU_BASE_URL = "http://releases.ubuntu.com/"
     KALI_BASE_URL = "https://cdimage.kali.org/"
     KALI_CURRENT_URL = "https://cdimage.kali.org/current/"
+    PARROT_BASE_URL = "https://download.parrot.sh/parrot/iso/"
+    PARROT_MIRROR_URL = "https://deb.parrot.sh/parrot/iso/"
     GPG_KEYSERVER = "hkp://keyserver.ubuntu.com:80"
     UBUNTU_SIGNING_KEY = "843938DF228D22F7B3742BC0D94AA3F0EFE21092"  # Ubuntu CD Image Signing Key
     KALI_SIGNING_KEY = "44C6513A8E4FB3D30875F758ED444FF07D8D0BF6"  # Kali Linux Official Signing Key
+    PARROT_SIGNING_KEY = "B71182234655E4D92DA02DF7A8286AF0E81EE4A"  # Parrot Archive Keyring (2024-2026)
     
     def __init__(self, config: Config):
         super().__init__("linux", config)
@@ -128,7 +199,7 @@ class LinuxProvider(OSImageProvider):
         self._cache_expires = 0
         
     def get_available_images(self) -> List[OSImageInfo]:
-        """Get all available Ubuntu LTS and Kali Linux images"""
+        """Get all available Ubuntu LTS, Kali Linux, and Parrot OS images"""
         import time
         
         # Use cache if still valid (1 hour)
@@ -151,6 +222,13 @@ class LinuxProvider(OSImageProvider):
             images.extend(kali_images)
         except Exception as e:
             self.logger.warning(f"Failed to get Kali Linux images: {e}")
+        
+        # Check Parrot OS releases
+        try:
+            parrot_images = self._get_parrot_images()
+            images.extend(parrot_images)
+        except Exception as e:
+            self.logger.warning(f"Failed to get Parrot OS images: {e}")
         
         # Update cache
         self._image_cache = images
@@ -312,6 +390,220 @@ class LinuxProvider(OSImageProvider):
             self.logger.warning(f"Failed to get archived Kali {version} images: {e}")
         
         return images
+    
+    def _get_parrot_images(self) -> List[OSImageInfo]:
+        """Get available Parrot OS images from all releases"""
+        images = []
+        
+        # Get latest release first (try current releases)
+        latest_versions = ["6.4", "6.3", "6.1"]  # Most recent versions first
+        for version in latest_versions:
+            try:
+                version_images = self._get_parrot_release_images(version)
+                images.extend(version_images)
+                if version_images:
+                    # If we found images for this version, don't try earlier ones to avoid duplicates
+                    break
+            except Exception as e:
+                self.logger.warning(f"Failed to get Parrot {version} images: {e}")
+        
+        # Get additional archived releases if needed
+        archived_versions = ["6.0", "5.3", "5.2"]
+        for version in archived_versions:
+            if version not in latest_versions:  # Don't re-fetch versions we already tried
+                try:
+                    archived_images = self._get_parrot_release_images(version)
+                    images.extend(archived_images)
+                except Exception as e:
+                    self.logger.warning(f"Failed to get archived Parrot {version} images: {e}")
+        
+        return images
+    
+    def _get_parrot_release_images(self, version: str) -> List[OSImageInfo]:
+        """Get available images for a specific Parrot OS release"""
+        images = []
+        
+        # Try primary URL first, then fallback to mirror
+        base_urls = [
+            urljoin(self.PARROT_BASE_URL, f"{version}/"),
+            urljoin(self.PARROT_MIRROR_URL, f"{version}/")
+        ]
+        
+        for base_url in base_urls:
+            try:
+                # Get release directory listing
+                response = self.session.get(base_url, timeout=15)
+                response.raise_for_status()
+                
+                # Parse available ISO files
+                iso_patterns = [
+                    r'href="(Parrot-.*?\.iso)"',  # New naming convention
+                    r'href="(parrot-.*?\.iso)"',  # Legacy naming
+                    r'href="(.*parrot.*\.iso)"',  # Catch-all for variations
+                ]
+                
+                isos = []
+                for pattern in iso_patterns:
+                    matches = re.findall(pattern, response.text, re.IGNORECASE)
+                    isos.extend(matches)
+                
+                # Remove duplicates while preserving order
+                seen = set()
+                unique_isos = []
+                for iso in isos:
+                    if iso.lower() not in seen:
+                        seen.add(iso.lower())
+                        unique_isos.append(iso)
+                
+                # Process each ISO
+                for iso_filename in unique_isos:
+                    image_info = self._process_parrot_iso(iso_filename, base_url, version)
+                    if image_info:
+                        images.append(image_info)
+                
+                # If we found images, break (don't try mirror)
+                if images:
+                    break
+                    
+            except Exception as e:
+                self.logger.warning(f"Failed to get Parrot {version} from {base_url}: {e}")
+                continue
+        
+        return images
+    
+    def _process_parrot_iso(self, iso_filename: str, base_url: str, version: str) -> Optional[OSImageInfo]:
+        """Process a Parrot ISO filename and create OSImageInfo"""
+        try:
+            # Determine architecture
+            arch = self._detect_parrot_architecture(iso_filename)
+            if not arch:
+                return None
+            
+            # Determine edition and variant
+            edition, variant_info = self._detect_parrot_edition(iso_filename)
+            
+            # Get file size
+            iso_url = urljoin(base_url, iso_filename)
+            size_bytes = self._get_file_size(iso_url)
+            
+            # Create unique image ID using sanitized filename stem
+            sanitized_stem = self._sanitize_parrot_filename_for_id(iso_filename)
+            image_id = f"parrot-{sanitized_stem}"
+            
+            # Build display name
+            parrot_info = self.PARROT_RELEASES.get(version, {"name": f"Parrot OS {version}"})
+            display_name = f"{parrot_info['name']} {variant_info['name']} ({arch})"
+            
+            # Create metadata
+            metadata = {
+                "distribution": "parrot",
+                "release_type": "stable",
+                "codename": parrot_info.get("codename", "lts"),
+                "filename": iso_filename,
+                "edition": edition,
+                "variant_info": variant_info,
+                "use_case": variant_info.get("use_case", "security_testing"),
+                "toolset": variant_info.get("toolset", "full"),
+                "checksum_url": urljoin(base_url, "signed-hashes.txt"),
+                "signature_url": urljoin(base_url, "signed-hashes.txt.gpg"),
+                "target_hardware": self._get_target_hardware(arch, iso_filename)
+            }
+            
+            # Add release date if available
+            if "release_date" in parrot_info:
+                metadata["release_date"] = parrot_info["release_date"]
+            
+            # Create image info
+            image = OSImageInfo(
+                id=image_id,
+                name=display_name,
+                os_family="linux",
+                version=version,
+                architecture=arch,
+                size_bytes=size_bytes,
+                download_url=iso_url,
+                checksum=None,  # Will be populated when needed
+                checksum_type="sha256",
+                verification_method=VerificationMethod.HYBRID,  # SHA256 + GPG
+                status=ImageStatus.AVAILABLE,
+                provider=self.name,
+                metadata=metadata
+            )
+            
+            return image
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to process Parrot ISO {iso_filename}: {e}")
+            return None
+    
+    def _sanitize_parrot_filename_for_id(self, filename: str) -> str:
+        """Sanitize Parrot filename for use in image IDs
+        
+        Examples:
+        - Parrot-security-6.1_amd64.iso → security-6.1-amd64
+        - parrot-home-5.3-amd64.iso → home-5.3-amd64
+        - Parrot-architect-6.0_arm64.iso → architect-6.0-arm64
+        """
+        # Remove extensions
+        stem = filename
+        for ext in ['.iso', '.img', '.xz']:
+            if stem.lower().endswith(ext):
+                stem = stem[:-len(ext)]
+                break
+        
+        # Remove common parrot prefixes
+        prefixes_to_remove = ['Parrot-', 'parrot-', 'Parrot_', 'parrot_']
+        for prefix in prefixes_to_remove:
+            if stem.startswith(prefix):
+                stem = stem[len(prefix):]
+                break
+        
+        # Replace underscores and other problematic characters with dashes
+        sanitized = re.sub(r'[^a-zA-Z0-9.-]', '-', stem)
+        
+        # Clean up multiple consecutive dashes
+        sanitized = re.sub(r'-+', '-', sanitized)
+        
+        # Remove leading/trailing dashes
+        sanitized = sanitized.strip('-')
+        
+        return sanitized
+    
+    def _detect_parrot_architecture(self, filename: str) -> Optional[str]:
+        """Detect architecture from Parrot ISO filename"""
+        filename_lower = filename.lower()
+        
+        # Check for explicit architecture indicators
+        if "amd64" in filename_lower or "x86_64" in filename_lower:
+            return "x86_64"
+        elif "arm64" in filename_lower or "aarch64" in filename_lower:
+            return "arm64"
+        elif "i386" in filename_lower:
+            return "i386"
+        
+        # Parrot primarily focuses on x86_64, so default assumption
+        # Only if we don't see any ARM indicators
+        if not any(arm_indicator in filename_lower for arm_indicator in ["arm", "rpi", "raspberry"]):
+            return "x86_64"
+        
+        return None
+    
+    def _detect_parrot_edition(self, filename: str) -> Tuple[str, Dict[str, str]]:
+        """Detect Parrot edition and return edition key with variant info"""
+        filename_lower = filename.lower()
+        
+        # Check for specific editions (most specific first)
+        if "security" in filename_lower or "sec" in filename_lower:
+            return "security", self.PARROT_EDITIONS["security"]
+        elif "home" in filename_lower:
+            return "home", self.PARROT_EDITIONS["home"]
+        elif "architect" in filename_lower:
+            return "architect", self.PARROT_EDITIONS["architect"]
+        elif "cloud" in filename_lower or "iot" in filename_lower:
+            return "cloud", self.PARROT_EDITIONS["cloud"]
+        
+        # Default to security edition for Parrot (most common)
+        return "security", self.PARROT_EDITIONS["security"]
     
     def _process_kali_iso(self, iso_filename: str, base_url: str, version: str) -> Optional[OSImageInfo]:
         """Process a Kali ISO filename and create OSImageInfo"""
@@ -528,7 +820,7 @@ class LinuxProvider(OSImageProvider):
             return 0
     
     def search_images(self, query: str, os_family: Optional[str] = None) -> List[OSImageInfo]:
-        """Search for Linux images matching query across Ubuntu and Kali distributions"""
+        """Search for Linux images matching query across Ubuntu, Kali, and Parrot distributions"""
         if os_family and os_family != "linux":
             return []
         
@@ -566,7 +858,7 @@ class LinuxProvider(OSImageProvider):
         return results
     
     def get_latest_image(self, os_family: str, version_pattern: Optional[str] = None) -> Optional[OSImageInfo]:
-        """Get the latest Linux image (Ubuntu LTS or Kali)"""
+        """Get the latest Linux image (Ubuntu LTS, Kali, or Parrot)"""
         if os_family != "linux":
             return None
         
@@ -580,9 +872,10 @@ class LinuxProvider(OSImageProvider):
                      pattern_lower in img.metadata.get('distribution', '').lower()]
         
         if images:
-            # Separate Ubuntu and Kali images
+            # Separate Ubuntu, Kali, and Parrot images
             ubuntu_images = [img for img in images if img.metadata.get('distribution') == 'ubuntu']
             kali_images = [img for img in images if img.metadata.get('distribution') == 'kali']
+            parrot_images = [img for img in images if img.metadata.get('distribution') == 'parrot']
             
             latest_images = []
             
@@ -612,34 +905,61 @@ class LinuxProvider(OSImageProvider):
                 else:
                     latest_images.append(sorted_kali[0])
             
-            # Return the most recent overall (preserve Ubuntu-first behavior unless explicitly requested)
-            if latest_images:
-                if len(latest_images) == 2:  # Both Ubuntu and Kali available
-                    # Check if user specifically requested Kali via version pattern
-                    if version_pattern:
-                        pattern_lower = version_pattern.lower()
-                        if any(kali_term in pattern_lower for kali_term in ['kali', 'security', 'penetration', 'pentest']):
-                            # User wants Kali - return it
-                            kali_img = next((img for img in latest_images if img.metadata.get('distribution') == 'kali'), None)
-                            if kali_img:
-                                return kali_img
-                    
-                    # Default behavior: prefer Ubuntu for backward compatibility
-                    ubuntu_img = next((img for img in latest_images if img.metadata.get('distribution') == 'ubuntu'), None)
-                    if ubuntu_img:
-                        return ubuntu_img
+            # Get latest Parrot image (newest by version)
+            if parrot_images:
+                sorted_parrot = sorted(parrot_images, 
+                                     key=lambda x: tuple(map(int, x.version.split('.'))), 
+                                     reverse=True)
                 
+                # Prefer security edition for Parrot
+                security_parrot = [img for img in sorted_parrot if img.metadata.get('edition') == 'security']
+                if security_parrot:
+                    latest_images.append(security_parrot[0])
+                else:
+                    latest_images.append(sorted_parrot[0])
+            
+            # Return the most appropriate image based on user preference or default behavior
+            if latest_images:
+                # Check if user specifically requested a distribution via version pattern
+                if version_pattern:
+                    pattern_lower = version_pattern.lower()
+                    
+                    # Check for Parrot-specific terms
+                    if any(parrot_term in pattern_lower for parrot_term in ['parrot', 'privacy', 'home']):
+                        parrot_img = next((img for img in latest_images if img.metadata.get('distribution') == 'parrot'), None)
+                        if parrot_img:
+                            return parrot_img
+                    
+                    # Check for Kali-specific terms
+                    elif any(kali_term in pattern_lower for kali_term in ['kali', 'penetration', 'pentest']):
+                        kali_img = next((img for img in latest_images if img.metadata.get('distribution') == 'kali'), None)
+                        if kali_img:
+                            return kali_img
+                    
+                    # Check for Ubuntu-specific terms
+                    elif any(ubuntu_term in pattern_lower for ubuntu_term in ['ubuntu', 'lts', 'noble', 'jammy', 'focal']):
+                        ubuntu_img = next((img for img in latest_images if img.metadata.get('distribution') == 'ubuntu'), None)
+                        if ubuntu_img:
+                            return ubuntu_img
+                
+                # Default behavior: prefer Ubuntu for backward compatibility, then Parrot, then Kali
+                for preferred_dist in ['ubuntu', 'parrot', 'kali']:
+                    dist_img = next((img for img in latest_images if img.metadata.get('distribution') == preferred_dist), None)
+                    if dist_img:
+                        return dist_img
+                
+                # Fallback: return first available
                 return latest_images[0]
         
         return None
     
     def verify_image(self, image_info: OSImageInfo, local_path: str) -> bool:
-        """Verify Linux image (Ubuntu/Kali) using SHA256 + GPG signature"""
+        """Verify Linux image (Ubuntu/Kali/Parrot) using SHA256 + GPG signature"""
         try:
             distribution = image_info.metadata.get("distribution", "ubuntu")
             self.logger.info(f"Verifying {distribution} image: {local_path}")
             
-            # Step 1: Download and verify SHA256SUMS file
+            # Step 1: Download and verify checksum files
             checksum_url = image_info.metadata.get("checksum_url")
             signature_url = image_info.metadata.get("signature_url")
             filename = image_info.metadata.get("filename")
@@ -648,15 +968,22 @@ class LinuxProvider(OSImageProvider):
                 self.logger.error("Missing verification URLs in image metadata")
                 return False
             
-            # Download SHA256SUMS and signature
+            # Download checksums and signature
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_path = Path(temp_dir)
                 
-                checksums_path = temp_path / "SHA256SUMS"
-                signature_path = temp_path / "SHA256SUMS.gpg"
+                # Different distributions use different checksum file names
+                if distribution == "parrot":
+                    checksums_path = temp_path / "signed-hashes.txt"
+                    signature_path = temp_path / "signed-hashes.txt.gpg"
+                    checksum_name = "signed-hashes.txt"
+                else:
+                    checksums_path = temp_path / "SHA256SUMS"
+                    signature_path = temp_path / "SHA256SUMS.gpg"
+                    checksum_name = "SHA256SUMS"
                 
-                # Download SHA256SUMS
-                self.logger.info("Downloading SHA256SUMS...")
+                # Download checksums file
+                self.logger.info(f"Downloading {checksum_name}...")
                 checksums_response = self.session.get(checksum_url, timeout=30)
                 checksums_response.raise_for_status()
                 checksums_path.write_text(checksums_response.text)
@@ -694,7 +1021,7 @@ class LinuxProvider(OSImageProvider):
             return False
     
     def _verify_gpg_signature(self, checksums_path: Path, signature_path: Path, distribution: str) -> bool:
-        """Verify GPG signature of SHA256SUMS file"""
+        """Verify GPG signature of checksums file"""
         try:
             # Check if GPG is available
             subprocess.run(["gpg", "--version"], check=True, capture_output=True)
@@ -703,6 +1030,9 @@ class LinuxProvider(OSImageProvider):
             if distribution == "kali":
                 signing_key = self.KALI_SIGNING_KEY
                 key_name = "Kali"
+            elif distribution == "parrot":
+                signing_key = self.PARROT_SIGNING_KEY
+                key_name = "Parrot"
             else:
                 signing_key = self.UBUNTU_SIGNING_KEY
                 key_name = "Ubuntu"
@@ -726,7 +1056,7 @@ class LinuxProvider(OSImageProvider):
                 return True
             else:
                 self.logger.warning(f"GPG verification warning: {result.stderr.decode()}")
-                # Ubuntu signatures sometimes have warnings but are still valid
+                # Many distributions have trust warnings but are still valid
                 # Check if it's just a trust warning
                 stderr_text = result.stderr.decode().lower()
                 if "good signature" in stderr_text:

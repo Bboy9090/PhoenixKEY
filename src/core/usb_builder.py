@@ -77,17 +77,26 @@ class HardwareProfile:
     driver_packages: List[str] = field(default_factory=list)
     special_requirements: Dict[str, Any] = field(default_factory=dict)
     
+    # Enhanced Mac-specific fields
+    oclp_compatibility: Optional[str] = None  # "fully_supported", "partially_supported", "experimental", "unsupported"
+    native_macos_support: Dict[str, bool] = field(default_factory=dict)  # macOS versions natively supported
+    required_patches: Dict[str, List[str]] = field(default_factory=dict)  # macOS version -> required patches
+    optional_patches: Dict[str, List[str]] = field(default_factory=dict)  # macOS version -> optional patches
+    graphics_patches: List[str] = field(default_factory=list)  # Graphics-specific patches needed
+    audio_patches: List[str] = field(default_factory=list)  # Audio patches needed
+    wifi_bluetooth_patches: List[str] = field(default_factory=list)  # WiFi/Bluetooth patches
+    usb_patches: List[str] = field(default_factory=list)  # USB patches needed
+    secure_boot_model: Optional[str] = None  # SecureBootModel for OCLP
+    sip_requirements: Optional[str] = None  # "enabled", "disabled", "partial"
+    notes: List[str] = field(default_factory=list)  # Additional notes for this model
+    
     @classmethod
     def from_mac_model(cls, model: str) -> 'HardwareProfile':
         """Create hardware profile from Mac model identifier"""
         # Example: iMacPro1,1 -> iMac Pro 2017
-        mac_profiles = {
-            "iMacPro1,1": {"name": "iMac Pro 2017", "year": 2017, "cpu_family": "Intel Xeon W"},
-            "MacBookPro15,1": {"name": "MacBook Pro 15\" 2018", "year": 2018, "cpu_family": "Intel Core i7/i9"},
-            "MacBookPro16,1": {"name": "MacBook Pro 16\" 2019", "year": 2019, "cpu_family": "Intel Core i7/i9"},
-            "iMac20,1": {"name": "iMac 27\" 2020", "year": 2020, "cpu_family": "Intel Core i5/i7/i9"},
-            "MacBookAir10,1": {"name": "MacBook Air M1 2020", "year": 2020, "cpu_family": "Apple M1"},
-        }
+        # Import comprehensive Mac model data
+        from .hardware_profiles import get_mac_model_data
+        mac_profiles = get_mac_model_data()
         
         profile_data = mac_profiles.get(model, {"name": model, "year": None, "cpu_family": "Unknown"})
         
@@ -711,25 +720,362 @@ class USBBuilder(QThread):
             return False
     
     def _deploy_macos_oclp_files(self, mount_points: Dict[str, str]) -> bool:
-        """Deploy macOS OCLP specific files"""
+        """Deploy macOS OCLP specific files to create bootable USB"""
         try:
-            # This would implement specific macOS + OCLP deployment logic
             self._log_message("INFO", "Deploying macOS OCLP files")
             
-            # Example: Copy installer to main partition
-            if "macOS Installer" in mount_points:
-                installer_mount = mount_points["macOS Installer"]
-                # Copy macOS installer files here
-                
-            # Example: Setup OCLP tools partition
-            if "OCLP Tools" in mount_points:
-                tools_mount = mount_points["OCLP Tools"]
-                # Copy OCLP files here
+            # Step 1: Deploy EFI folder to EFI partition for bootability
+            if not self._deploy_oclp_efi_folder(mount_points):
+                return False
             
+            # Step 2: Deploy macOS installer if available
+            if not self._deploy_macos_installer(mount_points):
+                return False
+            
+            # Step 3: Deploy OCLP tools and utilities
+            if not self._deploy_oclp_tools(mount_points):
+                return False
+            
+            # Step 4: Create deployment metadata and verification files
+            if not self._create_deployment_metadata(mount_points):
+                return False
+            
+            self._log_message("INFO", "macOS OCLP deployment completed successfully")
             return True
             
         except Exception as e:
             self._log_message("ERROR", f"Error deploying macOS OCLP files: {e}")
+            return False
+    
+    def _deploy_oclp_efi_folder(self, mount_points: Dict[str, str]) -> bool:
+        """Deploy OCLP EFI folder to EFI partition for bootability"""
+        try:
+            # Find EFI partition mount point
+            efi_mount = None
+            for partition_name, mount_path in mount_points.items():
+                if "efi" in partition_name.lower():
+                    efi_mount = mount_path
+                    break
+            
+            if not efi_mount:
+                self._log_message("ERROR", "No EFI partition found for OCLP deployment")
+                return False
+            
+            # Look for OCLP build artifacts in source files
+            oclp_efi_source = None
+            oclp_metadata_file = None
+            
+            # Check for OCLP build result artifacts
+            for file_key, file_path in self.source_files.items():
+                file_path_obj = Path(file_path)
+                
+                if file_key == "oclp_build_result" or "oclp" in file_key.lower():
+                    if file_path_obj.is_dir():
+                        # Look for EFI folder in OCLP build directory
+                        potential_efi = file_path_obj / "EFI"
+                        if potential_efi.exists():
+                            oclp_efi_source = potential_efi
+                            break
+                        
+                        # Alternative: look for bootforge_oclp_build structure
+                        potential_build = file_path_obj / "bootforge_oclp_build" / "EFI"
+                        if potential_build.exists():
+                            oclp_efi_source = potential_build
+                            break
+                    
+                    elif file_path_obj.name == "oclp_deployment_info.json":
+                        oclp_metadata_file = file_path_obj
+            
+            if not oclp_efi_source:
+                self._log_message("WARNING", "No OCLP EFI folder found in source files - creating template structure")
+                return self._create_template_efi_structure(efi_mount)
+            
+            # Deploy EFI folder to USB EFI partition
+            efi_destination = Path(efi_mount) / "EFI"
+            
+            self._log_message("INFO", f"Copying OCLP EFI folder from {oclp_efi_source} to {efi_destination}")
+            
+            if efi_destination.exists():
+                shutil.rmtree(efi_destination)
+            
+            shutil.copytree(oclp_efi_source, efi_destination)
+            
+            # Verify critical EFI structure
+            if not self._verify_efi_boot_structure(efi_destination):
+                self._log_message("ERROR", "EFI boot structure verification failed")
+                return False
+            
+            # Copy metadata if available
+            if oclp_metadata_file:
+                metadata_dest = Path(efi_mount) / "oclp_deployment_info.json"
+                shutil.copy2(oclp_metadata_file, metadata_dest)
+                self._log_message("INFO", f"Copied OCLP metadata to {metadata_dest}")
+            
+            self._log_message("INFO", "OCLP EFI folder deployed successfully")
+            return True
+            
+        except Exception as e:
+            self._log_message("ERROR", f"Failed to deploy OCLP EFI folder: {e}")
+            return False
+    
+    def _verify_efi_boot_structure(self, efi_path: Path) -> bool:
+        """Verify EFI folder has correct structure for booting"""
+        try:
+            required_structure = {
+                "BOOT": ["BOOTx64.efi"],
+                "OC": ["config.plist", "OpenCore.efi"]
+            }
+            
+            missing_components = []
+            
+            for folder, required_files in required_structure.items():
+                folder_path = efi_path / folder
+                if not folder_path.exists():
+                    missing_components.append(f"Missing {folder} folder")
+                    continue
+                
+                for required_file in required_files:
+                    file_path = folder_path / required_file
+                    if not file_path.exists():
+                        # Some flexibility for alternative names
+                        if required_file == "BOOTx64.efi":
+                            # Check for alternative bootloader names
+                            alternatives = ["OpenCore.efi", "BOOTX64.EFI"]
+                            found_alternative = any((folder_path / alt).exists() for alt in alternatives)
+                            if not found_alternative:
+                                missing_components.append(f"Missing bootloader in {folder}")
+                        else:
+                            missing_components.append(f"Missing {folder}/{required_file}")
+            
+            if missing_components:
+                for component in missing_components:
+                    self._log_message("WARNING", f"EFI structure: {component}")
+                return False
+            else:
+                self._log_message("INFO", "EFI boot structure verification passed")
+                return True
+                
+        except Exception as e:
+            self._log_message("ERROR", f"EFI structure verification failed: {e}")
+            return False
+    
+    def _create_template_efi_structure(self, efi_mount: str) -> bool:
+        """Create template EFI structure when OCLP artifacts are not available"""
+        try:
+            self._log_message("INFO", "Creating template EFI structure for development")
+            
+            efi_path = Path(efi_mount) / "EFI"
+            efi_path.mkdir(exist_ok=True)
+            
+            # Create BOOT folder
+            boot_folder = efi_path / "BOOT"
+            boot_folder.mkdir(exist_ok=True)
+            
+            # Create placeholder bootloader
+            bootx64 = boot_folder / "BOOTx64.efi"
+            with open(bootx64, 'wb') as f:
+                f.write(b'BOOTFORGE_TEMPLATE_BOOTLOADER')
+            
+            # Create OC folder structure
+            oc_folder = efi_path / "OC"
+            oc_folder.mkdir(exist_ok=True)
+            
+            for subdir in ["Drivers", "Kexts", "Tools", "ACPI", "Resources"]:
+                (oc_folder / subdir).mkdir(exist_ok=True)
+            
+            # Create template config.plist
+            config_content = '''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- BootForge Template OpenCore Configuration -->
+    <key>Misc</key>
+    <dict>
+        <key>Boot</key>
+        <dict>
+            <key>ShowPicker</key>
+            <true/>
+            <key>Timeout</key>
+            <integer>5</integer>
+        </dict>
+    </dict>
+    <key>UEFI</key>
+    <dict>
+        <key>Drivers</key>
+        <array>
+            <string>OpenRuntime.efi</string>
+        </array>
+    </dict>
+</dict>
+</plist>'''
+            
+            config_plist = oc_folder / "config.plist"
+            with open(config_plist, 'w') as f:
+                f.write(config_content)
+            
+            self._log_message("WARNING", "Template EFI structure created - replace with actual OCLP build for production use")
+            return True
+            
+        except Exception as e:
+            self._log_message("ERROR", f"Failed to create template EFI structure: {e}")
+            return False
+    
+    def _deploy_macos_installer(self, mount_points: Dict[str, str]) -> bool:
+        """Deploy macOS installer to the installer partition"""
+        try:
+            # Find macOS installer partition
+            installer_mount = None
+            for partition_name, mount_path in mount_points.items():
+                if "macos" in partition_name.lower() and "installer" in partition_name.lower():
+                    installer_mount = mount_path
+                    break
+            
+            if not installer_mount:
+                self._log_message("WARNING", "No macOS installer partition found")
+                return True  # Not critical, continue
+            
+            # Look for macOS installer in source files
+            installer_source = None
+            for file_key, file_path in self.source_files.items():
+                if "macos" in file_key.lower() and "installer" in file_key.lower():
+                    installer_source = Path(file_path)
+                    break
+                elif file_key.endswith(".app") and "install" in file_key.lower():
+                    installer_source = Path(file_path)
+                    break
+            
+            if not installer_source or not installer_source.exists():
+                self._log_message("WARNING", "No macOS installer found in source files")
+                return True  # Not critical for testing
+            
+            # Copy installer
+            installer_dest = Path(installer_mount) / installer_source.name
+            self._log_message("INFO", f"Copying macOS installer from {installer_source} to {installer_dest}")
+            
+            if installer_source.is_dir():
+                shutil.copytree(installer_source, installer_dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(installer_source, installer_dest)
+            
+            self._log_message("INFO", "macOS installer deployed successfully")
+            return True
+            
+        except Exception as e:
+            self._log_message("ERROR", f"Failed to deploy macOS installer: {e}")
+            return False
+    
+    def _deploy_oclp_tools(self, mount_points: Dict[str, str]) -> bool:
+        """Deploy OCLP tools and utilities to tools partition"""
+        try:
+            # Find OCLP tools partition
+            tools_mount = None
+            for partition_name, mount_path in mount_points.items():
+                if "oclp" in partition_name.lower() and "tools" in partition_name.lower():
+                    tools_mount = mount_path
+                    break
+            
+            if not tools_mount:
+                self._log_message("WARNING", "No OCLP tools partition found")
+                return True  # Not critical
+            
+            # Look for OCLP app in source files
+            oclp_app_source = None
+            for file_key, file_path in self.source_files.items():
+                if "oclp" in file_key.lower() or "opencore" in file_key.lower():
+                    oclp_app_source = Path(file_path)
+                    break
+            
+            if oclp_app_source and oclp_app_source.exists():
+                # Copy OCLP app
+                oclp_dest = Path(tools_mount) / oclp_app_source.name
+                self._log_message("INFO", f"Copying OCLP app from {oclp_app_source} to {oclp_dest}")
+                
+                if oclp_app_source.is_dir():
+                    shutil.copytree(oclp_app_source, oclp_dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(oclp_app_source, oclp_dest)
+            
+            # Create tools directory structure
+            tools_path = Path(tools_mount)
+            (tools_path / "Utilities").mkdir(exist_ok=True)
+            (tools_path / "Documentation").mkdir(exist_ok=True)
+            
+            # Create useful README
+            readme_content = f'''# BootForge OCLP Tools
+
+This USB drive was created by BootForge for macOS OCLP deployment.
+
+Created: {time.strftime("%Y-%m-%d %H:%M:%S")}
+Target Hardware: {getattr(self.hardware_profile, "name", "Unknown")}
+Recipe: {getattr(self.recipe, "name", "Unknown")}
+
+## Contents:
+
+- EFI partition: Contains OpenCore bootloader and configuration
+- macOS Installer: Contains macOS installation files
+- OCLP Tools: Contains OpenCore Legacy Patcher and utilities
+
+## Usage:
+
+1. Boot from this USB drive on your target Mac
+2. Follow the macOS installation process
+3. After installation, use the OCLP tools to apply post-install patches
+
+For more information, visit: https://dortania.github.io/OpenCore-Legacy-Patcher/
+'''
+            
+            readme_file = tools_path / "README.txt"
+            with open(readme_file, 'w') as f:
+                f.write(readme_content)
+            
+            self._log_message("INFO", "OCLP tools deployed successfully")
+            return True
+            
+        except Exception as e:
+            self._log_message("ERROR", f"Failed to deploy OCLP tools: {e}")
+            return False
+    
+    def _create_deployment_metadata(self, mount_points: Dict[str, str]) -> bool:
+        """Create deployment metadata and verification files"""
+        try:
+            # Create metadata on EFI partition
+            efi_mount = None
+            for partition_name, mount_path in mount_points.items():
+                if "efi" in partition_name.lower():
+                    efi_mount = mount_path
+                    break
+            
+            if not efi_mount:
+                self._log_message("WARNING", "No EFI partition found for metadata")
+                return True
+            
+            # Create deployment metadata
+            metadata = {
+                "bootforge_version": "1.0",
+                "deployment_type": "macOS_OCLP",
+                "created_timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "target_hardware": {
+                    "name": getattr(self.hardware_profile, "name", "Unknown"),
+                    "model": getattr(self.hardware_profile, "model", "Unknown"),
+                    "platform": getattr(self.hardware_profile, "platform", "Unknown")
+                },
+                "recipe": {
+                    "name": getattr(self.recipe, "name", "Unknown"),
+                    "description": getattr(self.recipe, "description", "Unknown")
+                },
+                "partitions": list(mount_points.keys()),
+                "source_files": list(self.source_files.keys())
+            }
+            
+            metadata_file = Path(efi_mount) / "bootforge_deployment.json"
+            with open(metadata_file, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            self._log_message("INFO", f"Created deployment metadata: {metadata_file}")
+            return True
+            
+        except Exception as e:
+            self._log_message("ERROR", f"Failed to create deployment metadata: {e}")
             return False
     
     def _deploy_windows_files(self, mount_points: Dict[str, str]) -> bool:

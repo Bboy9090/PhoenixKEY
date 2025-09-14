@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 BootForge Web Demo Server
-Simple web interface to showcase BootForge capabilities
+Simple web interface to showcase BootForge capabilities and serve downloads
 """
 
 from flask import Flask, render_template, jsonify, send_from_directory
@@ -94,9 +94,24 @@ def index():
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(0, 212, 255, 0.3);
         }
+        .download-btn.available {
+            background: #28a745;
+        }
+        .download-btn.coming-soon {
+            background: #6c757d;
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
         .note {
             background: rgba(255, 193, 7, 0.1);
             border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 2rem 0;
+        }
+        .status {
+            background: rgba(40, 167, 69, 0.1);
+            border: 1px solid #28a745;
             border-radius: 8px;
             padding: 1rem;
             margin: 2rem 0;
@@ -122,9 +137,9 @@ def index():
             <p>Create bootable USB drives for macOS, Windows, and Linux with advanced features</p>
         </div>
 
-        <div class="note">
-            <strong>🖥️ Desktop Application Notice:</strong> BootForge is a desktop application that requires direct access to USB hardware. 
-            This web demo showcases the features, but the full application must be downloaded and run locally.
+        <div class="status">
+            <strong>✅ Ready for Distribution:</strong> Linux executable and USB package are ready for download. 
+            The USB package includes auto-installers for all platforms and works on Windows/Mac/Linux computers.
         </div>
 
         <div class="features">
@@ -157,10 +172,13 @@ def index():
         <div class="download-section">
             <h2>Download BootForge</h2>
             <p>Get the full desktop application with hardware access and complete functionality</p>
-            <a href="/download/linux" class="download-btn">📱 Linux (64-bit)</a>
+            <a href="/download/linux" class="download-btn available">📱 Linux (64-bit) - Ready!</a>
+            <a href="/download/usb-package" class="download-btn available">💾 USB Package - All Platforms</a>
+            <a href="#" class="download-btn coming-soon" onclick="alert('Windows build coming soon!')">🪟 Windows - Coming Soon</a>
+            <a href="#" class="download-btn coming-soon" onclick="alert('macOS build coming soon!')">🍎 macOS - Coming Soon</a>
             <a href="/cli-demo" class="download-btn">🔧 CLI Demo</a>
             <p style="margin-top: 1rem; color: #cccccc;">
-                Windows and macOS versions available with PyInstaller packaging
+                Cross-platform builds will be available soon
             </p>
         </div>
 
@@ -191,9 +209,23 @@ def index():
 def download_linux():
     """Serve the Linux executable"""
     try:
-        return send_from_directory('dist', 'BootForge', as_attachment=True)
-    except:
-        return jsonify({"error": "Download not available in demo"}), 404
+        return send_from_directory('dist', 'BootForge-Linux-x64', as_attachment=True, 
+                                 download_name='BootForge-Linux-x64')
+    except FileNotFoundError:
+        return jsonify({"error": "Linux executable not found. Build in progress."}), 404
+    except Exception as e:
+        return jsonify({"error": f"Download failed: {str(e)}"}), 500
+
+@app.route('/download/usb-package')
+def download_usb_package():
+    """Serve the complete USB distribution package"""
+    try:
+        return send_from_directory('dist', 'BootForge-USB-Package.tar.gz', as_attachment=True, 
+                                 download_name='BootForge-USB-Package.tar.gz')
+    except FileNotFoundError:
+        return jsonify({"error": "USB package not found. Build in progress."}), 404
+    except Exception as e:
+        return jsonify({"error": f"Download failed: {str(e)}"}), 500
 
 @app.route('/cli-demo')
 def cli_demo():
@@ -229,18 +261,19 @@ def cli_demo():
 </head>
 <body>
     <div class="terminal">
-        <div class="prompt">$ python3 main.py --help</div>
+        <div class="prompt">$ ./BootForge-Linux-x64 --help</div>
         <div class="output">
 BootForge v1.0.0 - Professional OS Deployment Tool
 
 Usage:
-  python3 main.py [OPTIONS] COMMAND [ARGS]...
+  ./BootForge-Linux-x64 [OPTIONS] COMMAND [ARGS]...
 
 Commands:
-  detect-hardware     Detect and analyze system hardware
-  list-recipes        Show available deployment recipes  
-  build-usb          Create bootable USB drive
-  verify-build       Verify USB build integrity
+  list-devices        List available USB devices
+  write-image         Write OS image to USB device
+  diagnose           Run hardware diagnostics
+  format-device      Format USB device  
+  list-plugins       Show available plugins
   --gui              Launch graphical interface
 
 Options:
@@ -249,18 +282,17 @@ Options:
   --help            Show this message and exit
 
 Examples:
-  python3 main.py --gui                    # Launch GUI
-  python3 main.py detect-hardware         # Hardware scan
-  python3 main.py list-recipes            # Show recipes
+  ./BootForge-Linux-x64 --gui                    # Launch GUI
+  ./BootForge-Linux-x64 list-devices            # List USB devices
+  ./BootForge-Linux-x64 diagnose               # Hardware scan
         </div>
         
         <div style="margin-top: 2rem;">
-            <div class="prompt">$ python3 main.py detect-hardware</div>
+            <div class="prompt">$ ./BootForge-Linux-x64 list-devices</div>
             <div class="output">
-🔍 Hardware Detection Results:
-   Platform: Linux System
-   USB Devices: 0 detected
-   Recommended: Custom payload deployment
+🔍 Scanning for USB devices...
+📱 Found 0 devices (requires root privileges for full access)
+💡 Run with sudo for complete device detection
             </div>
         </div>
         

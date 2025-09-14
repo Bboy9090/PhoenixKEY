@@ -33,4 +33,3 @@ grpcio
 grpcio-tools
 protobuf
 zeroconf
-flask

@@ -10,17 +10,18 @@ import logging
 import hashlib
 import requests
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple, Set, Any
 from urllib.parse import urlparse
 
 from src.core.os_image_manager import (
     OSImageProvider, OSImageInfo, ImageStatus, VerificationMethod
 )
 from src.core.config import Config
-from src.core.patch_pipeline import PatchPlanner
+from src.core.patch_pipeline import PatchPlanner, PatchSet, PatchAction
 from src.core.hardware_detector import DetectedHardware
-from src.core.models import HardwareProfile
+from src.core.models import HardwareProfile, DeploymentRecipe, DeploymentType
 from src.core.safety_validator import SafetyValidator, PatchValidationMode
+from src.core.win_patch_engine import WinPatchEngine, WindowsBypassType
 
 
 class WindowsProvider(OSImageProvider):
@@ -75,10 +76,15 @@ class WindowsProvider(OSImageProvider):
         # Load known checksums
         self._load_checksum_database()
         
-        # CRITICAL INTEGRATION: PatchPlanner with strict security defaults
+        # CRITICAL INTEGRATION: PatchPlanner with Windows bypass capability
         safety_validator = SafetyValidator(patch_mode=PatchValidationMode.COMPLIANT)
         self.patch_planner = PatchPlanner(safety_validator)
-        self.logger.info("WindowsProvider initialized with COMPLIANT security mode")
+        
+        # ENHANCED: Windows Patch Engine for TPM/RAM/Secure Boot bypasses
+        self.win_patch_engine = WinPatchEngine(config, safety_validator.safety_level)
+        
+        self.logger.info("WindowsProvider initialized with COMPLIANT security mode and Windows bypass engine")
+        self.logger.info(f"Windows Patch Engine loaded with {len(self.win_patch_engine.bypass_database)} bypasses")
     
     def _load_checksum_database(self):
         """Load known Windows ISO checksums from various sources"""
@@ -472,3 +478,244 @@ class WindowsProvider(OSImageProvider):
             A SHA256 checksum will be calculated for verification.
             """
         }
+    
+    def create_patched_windows_image(self, image_info: OSImageInfo, 
+                                   hardware: DetectedHardware, 
+                                   output_path: str,
+                                   bypass_restrictions: bool = False) -> bool:
+        """
+        Create patched Windows image with TPM/RAM/Secure Boot bypasses
+        
+        Args:
+            image_info: Windows ISO image information
+            hardware: Detected target hardware
+            output_path: Path for patched ISO output
+            bypass_restrictions: Whether to apply Windows 11 bypasses (requires explicit consent)
+        
+        Returns:
+            True if patching successful, False otherwise
+        """
+        try:
+            self.logger.info(f"Creating patched Windows image for {hardware.get_summary()}")
+            
+            if not image_info.local_path or not os.path.exists(image_info.local_path):
+                self.logger.error("Source Windows ISO not found")
+                return False
+            
+            # Determine Windows version
+            windows_version = image_info.version or "11"
+            
+            # Get required bypasses for this hardware
+            bypass_analysis = self.win_patch_engine.supports_hardware(hardware, windows_version)
+            self.logger.info(f"Bypass analysis: {bypass_analysis}")
+            
+            # Apply patches if bypasses are needed
+            if bypass_restrictions and bypass_analysis["bypass_count"] > 0:
+                self.logger.info(f"Applying {bypass_analysis['bypass_count']} bypasses for Windows {windows_version}")
+                
+                # Use WinPatchEngine to patch the image
+                success = self.win_patch_engine.patch_windows_image(
+                    iso_path=image_info.local_path,
+                    hardware=hardware,
+                    windows_version=windows_version,
+                    output_path=output_path,
+                    bypasses=None,  # Auto-detect
+                    inject_drivers=True
+                )
+                
+                if success:
+                    # Get patch summary
+                    patch_summary = self.win_patch_engine.get_bypass_summary()
+                    self.logger.info(f"Successfully patched Windows image:")
+                    self.logger.info(f"  - Applied bypasses: {patch_summary['total_bypasses']}")
+                    self.logger.info(f"  - Injected drivers: {patch_summary['total_drivers']}")
+                    
+                    # Update image metadata
+                    image_info.metadata.update({
+                        "patched": True,
+                        "patch_summary": patch_summary,
+                        "target_hardware": hardware.get_summary(),
+                        "bypass_analysis": bypass_analysis
+                    })
+                    
+                    return True
+                else:
+                    self.logger.error("Failed to patch Windows image")
+                    return False
+            else:
+                # No bypasses needed, copy original ISO
+                self.logger.info("No bypasses required, using original Windows image")
+                import shutil
+                shutil.copy2(image_info.local_path, output_path)
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Error creating patched Windows image: {e}")
+            return False
+    
+    def get_hardware_compatibility(self, image_info: OSImageInfo, 
+                                 hardware: DetectedHardware) -> Dict[str, Any]:
+        """
+        Analyze hardware compatibility with Windows image
+        
+        Args:
+            image_info: Windows ISO image information
+            hardware: Target hardware configuration
+            
+        Returns:
+            Compatibility analysis with bypass requirements
+        """
+        try:
+            windows_version = image_info.version or "11"
+            
+            # Get bypass analysis from WinPatchEngine
+            compatibility = self.win_patch_engine.supports_hardware(hardware, windows_version)
+            
+            # Add Windows provider specific information
+            compatibility.update({
+                "windows_version": windows_version,
+                "image_name": image_info.name,
+                "image_size_gb": round(image_info.size_bytes / (1024**3), 2),
+                "original_requirements_met": compatibility["bypass_count"] == 0,
+                "can_install_with_bypasses": True,  # We can always install with bypasses
+                "provider": self.name
+            })
+            
+            return compatibility
+            
+        except Exception as e:
+            self.logger.error(f"Error analyzing hardware compatibility: {e}")
+            return {
+                "supports_installation": False,
+                "error": str(e)
+            }
+    
+    def create_windows_deployment_recipe(self, image_info: OSImageInfo, 
+                                       hardware: DetectedHardware,
+                                       bypass_restrictions: bool = False) -> Optional[DeploymentRecipe]:
+        """
+        Create deployment recipe for Windows installation with bypasses
+        
+        Args:
+            image_info: Windows ISO image information
+            hardware: Target hardware configuration
+            bypass_restrictions: Whether to include bypass modifications (requires explicit consent)
+            
+        Returns:
+            DeploymentRecipe configured for this Windows installation
+        """
+        try:
+            windows_version = image_info.version or "11"
+            
+            # Get compatibility analysis
+            compatibility = self.get_hardware_compatibility(image_info, hardware)
+            
+            # Create base Windows recipe
+            recipe = DeploymentRecipe.create_windows_unattended_recipe()
+            
+            # Customize for specific hardware and bypasses
+            recipe.name = f"Windows {windows_version} for {hardware.system_model or 'Generic Hardware'}"
+            recipe.description = f"Windows {windows_version} installation with BootForge bypasses"
+            
+            # Update required files
+            recipe.required_files = [
+                image_info.local_path,  # Source Windows ISO
+                "autounattend.xml"      # Unattended installation config
+            ]
+            
+            # Add bypass information to metadata
+            recipe.metadata.update({
+                "windows_version": windows_version,
+                "target_hardware": hardware.get_summary(),
+                "compatibility_analysis": compatibility,
+                "bypass_restrictions": bypass_restrictions,
+                "patch_engine": "WinPatchEngine",
+                "supports_tpm_bypass": WindowsBypassType.TPM_BYPASS.value in compatibility.get("required_bypasses", []),
+                "supports_ram_bypass": WindowsBypassType.RAM_BYPASS.value in compatibility.get("required_bypasses", []),
+                "supports_secureboot_bypass": WindowsBypassType.SECURE_BOOT_BYPASS.value in compatibility.get("required_bypasses", [])
+            })
+            
+            # Update hardware profiles
+            if hardware.system_model:
+                recipe.hardware_profiles = [hardware.system_model]
+            else:
+                recipe.hardware_profiles = ["generic_windows_x64"]
+            
+            self.logger.info(f"Created Windows deployment recipe: {recipe.name}")
+            return recipe
+            
+        except Exception as e:
+            self.logger.error(f"Error creating Windows deployment recipe: {e}")
+            return None
+    
+    def validate_windows_installation_requirements(self, image_info: OSImageInfo, 
+                                                 hardware: DetectedHardware) -> Dict[str, Any]:
+        """
+        Validate Windows installation requirements and suggest bypasses
+        
+        Args:
+            image_info: Windows ISO image information
+            hardware: Target hardware configuration
+            
+        Returns:
+            Validation results with bypass suggestions
+        """
+        try:
+            windows_version = image_info.version or "11"
+            validation_results = {
+                "can_install": True,
+                "meets_official_requirements": True,
+                "required_bypasses": [],
+                "warnings": [],
+                "recommendations": []
+            }
+            
+            # Check Windows 11 specific requirements
+            if windows_version == "11":
+                # TPM 2.0 Check
+                tpm_version = hardware.bios_info.get("tpm_version", "")
+                if not tmp_version or not tmp_version.startswith("2."):
+                    validation_results["meets_official_requirements"] = False
+                    validation_results["required_bypasses"].append("TPM 2.0 Bypass")
+                    validation_results["warnings"].append("TPM 2.0 not detected - security features may be limited")
+                
+                # RAM Check (4GB minimum)
+                if hardware.total_ram_gb and hardware.total_ram_gb < 4.0:
+                    validation_results["meets_official_requirements"] = False
+                    validation_results["required_bypasses"].append("RAM Requirement Bypass")
+                    validation_results["warnings"].append(f"Only {hardware.total_ram_gb}GB RAM detected - performance may be poor")
+                
+                # Secure Boot Check
+                secure_boot = hardware.bios_info.get("secure_boot_enabled", False)
+                firmware_type = hardware.bios_info.get("firmware_type", "").lower()
+                if firmware_type in ["legacy", "bios"] or not secure_boot:
+                    validation_results["meets_official_requirements"] = False
+                    validation_results["required_bypasses"].append("Secure Boot Bypass")
+                    validation_results["warnings"].append("Secure Boot not available - some security features disabled")
+                
+                # CPU Generation Check (simplified)
+                if hardware.cpu_name:
+                    cpu_name = hardware.cpu_name.lower()
+                    if any(old_gen in cpu_name for old_gen in ["2nd", "3rd", "4th", "5th", "6th", "7th", "fx-", "a10", "a8"]):
+                        validation_results["meets_official_requirements"] = False
+                        validation_results["required_bypasses"].append("CPU Compatibility Bypass")
+                        validation_results["warnings"].append("Older CPU may not support all Windows 11 features")
+            
+            # Add recommendations
+            if validation_results["required_bypasses"]:
+                validation_results["recommendations"].extend([
+                    "BootForge can bypass these restrictions to enable installation",
+                    "Consider the security and performance implications",
+                    "Ensure you have a valid Windows license",
+                    "Bypassed installations may not receive all Microsoft support"
+                ])
+            
+            self.logger.info(f"Windows {windows_version} validation: {len(validation_results['required_bypasses'])} bypasses needed")
+            return validation_results
+            
+        except Exception as e:
+            self.logger.error(f"Error validating Windows requirements: {e}")
+            return {
+                "can_install": False,
+                "error": str(e)
+            }

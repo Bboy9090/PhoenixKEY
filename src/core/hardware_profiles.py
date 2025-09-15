@@ -734,11 +734,14 @@ def get_enhanced_mac_profiles() -> List[HardwareProfile]:
 
 
 def get_default_profiles() -> List[HardwareProfile]:
-    """Get default hardware profiles for common devices including enhanced Mac models"""
+    """Get default hardware profiles for common devices including enhanced Mac models and Windows systems"""
     profiles = []
     
     # Get comprehensive Mac profiles
     profiles.extend(get_enhanced_mac_profiles())
+    
+    # Get comprehensive Windows profiles (with bypass support)
+    profiles.extend(get_windows_profiles())
     
     # Windows profiles
     profiles.extend([
@@ -1773,3 +1776,205 @@ def get_mac_oclp_requirements(model_id: str, macos_version: str) -> Dict[str, An
         "sip_requirements": model_data.get("sip_requirements"),
         "notes": model_data.get("notes", [])
     }
+
+
+def get_windows_hardware_profiles() -> List[Dict[str, Any]]:
+    """
+    Get comprehensive Windows hardware profiles with bypass requirements
+    Designed for universal Windows 10/11 compatibility on ANY hardware
+    """
+    
+    windows_profiles = {
+        # ===== Generic Windows Profiles (Universal Compatibility) =====
+        
+        "generic_windows_x64": {
+            "name": "Generic x64 PC", "platform": "windows", "architecture": "x86_64",
+            "windows_compatibility": {"10": True, "11": "bypass_required"},
+            "bypass_requirements": {
+                "11": ["tpm_bypass", "ram_bypass", "cpu_bypass", "secure_boot_bypass"]
+            },
+            "driver_categories": ["network", "storage", "graphics", "audio", "chipset"],
+            "deployment_type": "windows_unattended",
+            "notes": ["Universal compatibility profile", "Requires bypasses for Windows 11"]
+        },
+        
+        "generic_windows_x86": {
+            "name": "Generic x86 PC", "platform": "windows", "architecture": "x86",
+            "windows_compatibility": {"10": True, "11": False},
+            "bypass_requirements": {"10": []},
+            "driver_categories": ["network", "storage", "graphics", "audio"],
+            "deployment_type": "windows_unattended",
+            "notes": ["Legacy 32-bit systems", "Windows 11 not supported"]
+        },
+        
+        # ===== Older Hardware Profiles (High Bypass Requirements) =====
+        
+        "legacy_bios_system": {
+            "name": "Legacy BIOS System", "platform": "windows", "architecture": "x86_64",
+            "windows_compatibility": {"10": True, "11": "bypass_required"},
+            "bypass_requirements": {
+                "11": ["tpm_bypass", "secure_boot_bypass", "storage_bypass", "cpu_bypass"],
+                "10": ["storage_bypass"]  # For GPT requirement
+            },
+            "firmware_type": "legacy_bios",
+            "driver_categories": ["network", "storage", "graphics", "audio", "chipset"],
+            "deployment_type": "windows_unattended",
+            "notes": ["Legacy BIOS without UEFI", "Requires MBR boot", "Extensive bypasses needed"]
+        },
+        
+        "older_intel_system": {
+            "name": "Older Intel System (Pre-8th Gen)", "platform": "windows", "architecture": "x86_64", 
+            "cpu_patterns": ["Intel.*Core.*[1-7].*", "Intel.*Pentium.*", "Intel.*Celeron.*"],
+            "windows_compatibility": {"10": True, "11": "bypass_required"},
+            "bypass_requirements": {
+                "11": ["cpu_bypass", "tpm_bypass", "secure_boot_bypass"],
+                "10": []
+            },
+            "driver_categories": ["network", "storage", "graphics", "audio", "chipset"],
+            "deployment_type": "windows_unattended",
+            "notes": ["Pre-8th gen Intel CPUs", "Windows 11 CPU compatibility bypass required"]
+        },
+        
+        "older_amd_system": {
+            "name": "Older AMD System (Pre-Ryzen 2000)", "platform": "windows", "architecture": "x86_64",
+            "cpu_patterns": ["AMD.*FX.*", "AMD.*A[0-9].*", "AMD.*Ryzen.*1[0-9][0-9][0-9].*"],
+            "windows_compatibility": {"10": True, "11": "bypass_required"},
+            "bypass_requirements": {
+                "11": ["cpu_bypass", "tpm_bypass", "secure_boot_bypass"],
+                "10": []
+            },
+            "driver_categories": ["network", "storage", "graphics", "audio", "chipset"],
+            "deployment_type": "windows_unattended", 
+            "notes": ["Pre-Ryzen 2000 AMD CPUs", "Windows 11 CPU compatibility bypass required"]
+        },
+        
+        # ===== Low-Resource Hardware Profiles =====
+        
+        "low_ram_system": {
+            "name": "Low RAM System (<4GB)", "platform": "windows", "architecture": "x86_64",
+            "ram_gb_max": 4.0,
+            "windows_compatibility": {"10": True, "11": "bypass_required"},
+            "bypass_requirements": {
+                "11": ["ram_bypass", "tpm_bypass"],
+                "10": []
+            },
+            "driver_categories": ["network", "storage", "graphics", "audio"],
+            "deployment_type": "windows_unattended",
+            "performance_notes": ["Limited performance with Windows 11", "Consider Windows 10"],
+            "notes": ["Systems with less than 4GB RAM", "Performance optimization recommended"]
+        },
+        
+        "netbook_atom_system": {
+            "name": "Netbook/Atom System", "platform": "windows", "architecture": "x86_64",
+            "cpu_patterns": ["Intel.*Atom.*", "Intel.*Celeron.*N[0-9][0-9][0-9][0-9].*"],
+            "ram_gb_max": 4.0,
+            "windows_compatibility": {"10": True, "11": "bypass_required"},
+            "bypass_requirements": {
+                "11": ["cpu_bypass", "ram_bypass", "tpm_bypass", "secure_boot_bypass"],
+                "10": []
+            },
+            "driver_categories": ["network", "storage", "graphics"],
+            "deployment_type": "windows_unattended",
+            "performance_notes": ["Very limited performance", "Windows 10 strongly recommended"],
+            "notes": ["Intel Atom netbooks", "Multiple bypasses required"]
+        },
+        
+        # ===== Virtual Machine Profiles =====
+        
+        "vmware_vm": {
+            "name": "VMware Virtual Machine", "platform": "windows", "architecture": "x86_64",
+            "virtualization": "vmware",
+            "windows_compatibility": {"10": True, "11": "bypass_required"},
+            "bypass_requirements": {
+                "11": ["tpm_bypass", "secure_boot_bypass"],  # VM TPM can be configured
+                "10": []
+            },
+            "driver_categories": ["network", "storage", "graphics"],
+            "special_drivers": ["vmware_tools", "vmxnet3", "pvscsi"],
+            "deployment_type": "windows_unattended",
+            "notes": ["VMware ESXi/Workstation", "TPM can be added in VM settings"]
+        },
+        
+        "virtualbox_vm": {
+            "name": "VirtualBox Virtual Machine", "platform": "windows", "architecture": "x86_64",
+            "virtualization": "virtualbox",
+            "windows_compatibility": {"10": True, "11": "bypass_required"},
+            "bypass_requirements": {
+                "11": ["tpm_bypass", "secure_boot_bypass", "cpu_bypass"],
+                "10": []
+            },
+            "driver_categories": ["network", "storage", "graphics"],
+            "special_drivers": ["vboxguest", "vboxsf", "vboxvideo"],
+            "deployment_type": "windows_unattended",
+            "notes": ["Oracle VirtualBox", "Multiple bypasses typically required"]
+        },
+        
+        # ===== Specialized Hardware Profiles =====
+        
+        "surface_pro_legacy": {
+            "name": "Microsoft Surface Pro (Legacy)", "platform": "windows", "architecture": "x86_64",
+            "manufacturer_patterns": ["Microsoft.*Surface.*"],
+            "windows_compatibility": {"10": True, "11": "mixed"},  # Depends on generation
+            "bypass_requirements": {
+                "11": ["cpu_bypass", "tpm_bypass"],  # Older Surface Pros
+                "10": []
+            },
+            "driver_categories": ["network", "storage", "graphics", "audio", "touchscreen"],
+            "special_drivers": ["surface_drivers", "intel_wifi", "surface_touch"],
+            "deployment_type": "windows_unattended",
+            "notes": ["Surface Pro 1-6", "May need specific Surface drivers"]
+        },
+        
+        "industrial_pc": {
+            "name": "Industrial/Embedded PC", "platform": "windows", "architecture": "x86_64",
+            "use_case": "industrial",
+            "windows_compatibility": {"10": True, "11": "bypass_required"},
+            "bypass_requirements": {
+                "11": ["tpm_bypass", "secure_boot_bypass", "cpu_bypass"],
+                "10": []
+            },
+            "driver_categories": ["network", "storage", "serial", "industrial_io"],
+            "deployment_type": "windows_unattended",
+            "notes": ["Fanless systems", "Specialized I/O requirements", "Long-term stability focus"]
+        }
+    }
+    
+    return list(windows_profiles.values())
+
+
+def get_windows_profiles() -> List[HardwareProfile]:
+    """Convert Windows profile data to HardwareProfile objects"""
+    profiles = []
+    
+    for profile_data in get_windows_hardware_profiles():
+        # Create Windows-specific hardware profile
+        profile = HardwareProfile(
+            name=profile_data["name"],
+            platform=profile_data["platform"],
+            model=profile_data.get("model", profile_data["name"]),
+            architecture=profile_data["architecture"],
+            
+            # Windows-specific fields
+            driver_packages=profile_data.get("driver_categories", []),
+            special_requirements={
+                "windows_compatibility": profile_data.get("windows_compatibility", {}),
+                "bypass_requirements": profile_data.get("bypass_requirements", {}),
+                "firmware_type": profile_data.get("firmware_type"),
+                "virtualization": profile_data.get("virtualization"),
+                "use_case": profile_data.get("use_case"),
+                "ram_gb_max": profile_data.get("ram_gb_max"),
+                "cpu_patterns": profile_data.get("cpu_patterns", []),
+                "manufacturer_patterns": profile_data.get("manufacturer_patterns", []),
+                "special_drivers": profile_data.get("special_drivers", []),
+                "performance_notes": profile_data.get("performance_notes", [])
+            },
+            
+            # Notes and compatibility
+            notes=profile_data.get("notes", []),
+            deployment_type=profile_data.get("deployment_type", "windows_unattended"),
+            supported_os_versions=list(profile_data.get("windows_compatibility", {}).keys())
+        )
+        
+        profiles.append(profile)
+    
+    return profiles

@@ -18,6 +18,11 @@ from src.core.os_image_manager import (
     OSImageProvider, OSImageInfo, ImageStatus, VerificationMethod
 )
 from src.core.config import Config
+from src.core.patch_pipeline import PatchPlanner
+from src.core.hardware_detector import DetectedHardware
+from src.core.models import HardwareProfile
+from src.core.hardware_profiles import create_mac_hardware_profile
+from src.core.safety_validator import SafetyValidator, PatchValidationMode
 
 
 class MacOSProvider(OSImageProvider):
@@ -54,6 +59,11 @@ class MacOSProvider(OSImageProvider):
         self._catalog_cache: Dict[str, Dict] = {}
         self._cache_expires = 0
         self._image_cache: List[OSImageInfo] = []
+        
+        # CRITICAL INTEGRATION: PatchPlanner with strict security defaults
+        safety_validator = SafetyValidator(patch_mode=PatchValidationMode.COMPLIANT)
+        self.patch_planner = PatchPlanner(safety_validator)
+        self.logger.info("MacOSProvider initialized with COMPLIANT security mode")
     
     def get_available_images(self) -> List[OSImageInfo]:
         """Get all available macOS recovery images"""
@@ -78,6 +88,100 @@ class MacOSProvider(OSImageProvider):
         self._cache_expires = time.time() + 7200  # Cache for 2 hours
         
         return images.copy()
+    
+    def prepare_patched_image(self, image_info: OSImageInfo, hardware: DetectedHardware, 
+                             target_mount_point: str, dry_run: bool = True) -> Tuple[bool, List[str]]:
+        """Prepare macOS image with hardware-specific patches using PatchPlanner"""
+        try:
+            self.logger.info(f"Preparing patched macOS image for {hardware.get_summary()}")
+            
+            # Create Mac hardware profile from detected hardware
+            if hardware.system_model:
+                hardware_profile = create_mac_hardware_profile(hardware.system_model)
+            else:
+                self.logger.warning("No system model detected, using generic Mac profile")
+                hardware_profile = HardwareProfile(
+                    name="Generic Mac",
+                    platform="mac", 
+                    model="unknown",
+                    architecture="x86_64"
+                )
+            
+            # Prepare OS info
+            os_info = {
+                "family": "macos",
+                "version": image_info.version,
+                "build": image_info.build_number,
+                "edition": getattr(image_info, 'edition', 'Standard')
+            }
+            
+            # Create patch plan using PatchPlanner
+            patch_plan = self.patch_planner.create_patch_plan(
+                hardware=hardware,
+                os_info=os_info,
+                hardware_profile=hardware_profile
+            )
+            
+            if not patch_plan:
+                return True, ["No patches required for this hardware/OS combination"]
+            
+            # Apply patches with strict security controls
+            success, execution_log = self.patch_planner.apply_patch_plan(
+                plan=patch_plan,
+                target_mount_point=target_mount_point,
+                dry_run=dry_run
+            )
+            
+            if success:
+                self.logger.info(f"macOS image patching {'simulated' if dry_run else 'completed'} successfully")
+            else:
+                self.logger.error(f"macOS image patching failed: {execution_log[-1] if execution_log else 'Unknown error'}")
+            
+            return success, execution_log
+            
+        except Exception as e:
+            error = f"Failed to prepare patched macOS image: {e}"
+            self.logger.error(error)
+            return False, [error]
+    
+    def get_recommended_patches(self, image_info: OSImageInfo, hardware: DetectedHardware) -> List[str]:
+        """Get list of recommended patches for macOS image and hardware combination"""
+        try:
+            # Create hardware profile
+            if hardware.system_model:
+                hardware_profile = create_mac_hardware_profile(hardware.system_model)
+            else:
+                return []  # No patches for unknown hardware
+            
+            # Prepare OS info
+            os_info = {
+                "family": "macos",
+                "version": image_info.version,
+                "build": image_info.build_number
+            }
+            
+            # Get patch plan
+            patch_plan = self.patch_planner.create_patch_plan(
+                hardware=hardware,
+                os_info=os_info,
+                hardware_profile=hardware_profile
+            )
+            
+            if not patch_plan:
+                return []
+            
+            # Extract patch names
+            patch_names = []
+            for patch_set in patch_plan.patch_sets:
+                patch_names.append(f"{patch_set.name} ({patch_set.id})")
+                for action in patch_set.actions:
+                    patch_names.append(f"  - {action.name} ({action.patch_type.value})")
+            
+            return patch_names
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get recommended patches: {e}")
+            return []
     
     def _process_catalog(self, major_version: str, catalog_url: str) -> List[OSImageInfo]:
         """Process Apple's software update catalog"""

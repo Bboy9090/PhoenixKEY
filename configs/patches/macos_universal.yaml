@@ -1,0 +1,271 @@
+# BootForge Universal macOS Patch Configuration
+# Defines hardware-specific patches for macOS deployment
+metadata:
+  name: "Universal macOS Patches"
+  version: "1.0.0"
+  description: "Comprehensive patch set for macOS deployment on unsupported hardware"
+  author: "BootForge Team"
+  created: "2024-09-15"
+  compatibility_version: "1.0"
+
+# Global patch requirements and constraints
+global_settings:
+  min_macos_version: "11.0"
+  max_macos_version: "14.7"
+  required_capabilities:
+    - KEXT_LOADING
+    - EFI_MODIFICATION
+  security_level: "moderate"
+  user_consent_required: true
+
+# Patch sets organized by hardware families
+patch_sets:
+  # Intel Mac Models 2015-2020 (OCLP Compatible)
+  intel_macs_broadwell_skylake:
+    id: "intel_macs_2015_2017"
+    name: "Intel Macs (2015-2017) - Broadwell/Skylake"
+    description: "Patches for MacBook Air/Pro models with Broadwell and Skylake CPUs"
+    
+    target_hardware:
+      patterns:
+        - "MacBookAir7,*"
+        - "MacBookPro12,*" 
+        - "MacBookPro13,*"
+        - "iMac16,*"
+        - "iMac17,*"
+      cpu_families:
+        - "Intel Core i5/i7 (Broadwell)"
+        - "Intel Core i5/i7 (Skylake)"
+      
+    target_os:
+      family: "macos"
+      versions:
+        - "11.*"
+        - "12.*"
+        - "13.*"
+        - "14.*"
+    
+    # Patch actions grouped by category
+    actions:
+      # Graphics compatibility patches
+      graphics:
+        - id: "intel_5000_controller"
+          name: "Intel HD 5000/6000 Graphics"
+          description: "Enable Intel integrated graphics on unsupported macOS versions"
+          type: "kext_injection"
+          phase: "post_install"
+          priority: "critical"
+          files:
+            - source: "Intel5000Controller.kext"
+              target: "/System/Library/Extensions/"
+              backup: true
+          conditions:
+            os_version: "1[1-4]\..*"
+            gpu_vendor: "Intel"
+          requires_reboot: true
+          reversible: true
+          
+        - id: "intel_framebuffer_patches"
+          name: "Intel Framebuffer Patches"
+          description: "Apply framebuffer patches for proper display output"
+          type: "kernel_patch"
+          phase: "post_install"
+          priority: "high"
+          patches:
+            - offset: "0x123456"
+              original: "48 8B 05 ?? ?? ?? ??"
+              patched: "48 8B 05 12 34 56 78"
+          conditions:
+            os_version: "1[2-4]\..*"
+          
+      # Audio functionality
+      audio:
+        - id: "apple_alc"
+          name: "AppleALC Audio Driver"
+          description: "Universal audio codec driver for unsupported hardware"
+          type: "kext_injection"
+          phase: "post_install"
+          priority: "high"
+          files:
+            - source: "AppleALC.kext"
+              target: "/System/Library/Extensions/"
+          dependencies:
+            - "lilu_kernel_extension"
+          requires_reboot: true
+          
+      # Network connectivity
+      network:
+        - id: "broadcom_wifi_patches"
+          name: "Broadcom WiFi Compatibility"
+          description: "Enable Broadcom WiFi cards on newer macOS versions"
+          type: "kext_injection"
+          phase: "post_install"
+          priority: "high"
+          files:
+            - source: "AirportBrcmFixup.kext"
+              target: "/System/Library/Extensions/"
+            - source: "BrcmPatchRAM3.kext"
+              target: "/System/Library/Extensions/"
+            - source: "BrcmFirmwareData.kext"
+              target: "/System/Library/Extensions/"
+          conditions:
+            network_vendor: "Broadcom"
+          
+      # System-level patches
+      system:
+        - id: "amfi_pass"
+          name: "AMFI Security Bypass"
+          description: "Bypass Apple Mobile File Integrity for unsigned kexts"
+          type: "kernel_patch"
+          phase: "post_install"
+          priority: "critical"
+          security_impact: "high"
+          user_consent: "explicit"
+          patches:
+            - description: "Disable AMFI enforcement"
+              target: "kernel"
+              offset: "auto_detect"
+              patch_data: "AMFI_DISABLE_SIGNATURE_ENFORCEMENT"
+          
+        - id: "sip_disable"
+          name: "Disable System Integrity Protection"
+          description: "Disable SIP to allow system modifications"
+          type: "config_patch"
+          phase: "pre_install"
+          priority: "critical"
+          security_impact: "high"
+          user_consent: "explicit"
+          command: "csrutil disable"
+          requires_recovery_mode: true
+          reversible: true
+          reverse_command: "csrutil enable"
+          
+        - id: "restrict_events"
+          name: "RestrictEvents Kext"
+          description: "Prevent unwanted system behavior on unsupported hardware"
+          type: "kext_injection"
+          phase: "post_install"
+          priority: "medium"
+          files:
+            - source: "RestrictEvents.kext"
+              target: "/System/Library/Extensions/"
+              
+  # AMD Ryzen Systems
+  amd_ryzen_systems:
+    id: "amd_ryzen_hackintosh"
+    name: "AMD Ryzen Hackintosh Patches"
+    description: "Patches for running macOS on AMD Ryzen systems"
+    
+    target_hardware:
+      patterns:
+        - "AMD*"
+      cpu_families:
+        - "AMD Ryzen*"
+        - "AMD FX*"
+        
+    target_os:
+      family: "macos"
+      versions:
+        - "12.*"
+        - "13.*"
+        - "14.*"
+        
+    actions:
+      cpu:
+        - id: "amd_kernel_patches"
+          name: "AMD Ryzen Kernel Patches"
+          description: "Apply AMD-specific kernel patches for compatibility"
+          type: "kernel_patch"
+          phase: "post_install"
+          priority: "critical"
+          security_impact: "medium"
+          patches:
+            - description: "AMD CPU topology patches"
+              target: "kernel"
+              patch_set: "amd_ryzen_17h_19h"
+          experimental: true
+          
+# Dependencies and requirements
+dependencies:
+  kexts:
+    lilu_kernel_extension:
+      name: "Lilu.kext"
+      version: ">=1.6.0"
+      source: "https://github.com/acidanthera/Lilu/releases"
+      description: "Arbitrary kext and process patching framework"
+      
+  tools:
+    opencore_patcher:
+      name: "OpenCore Legacy Patcher"
+      version: ">=0.6.8"
+      source: "https://github.com/dortania/OpenCore-Legacy-Patcher"
+      required_for:
+        - "intel_macs_2015_2017"
+
+# Validation rules and safety checks
+validation:
+  pre_install:
+    - check: "hardware_compatibility"
+      description: "Verify hardware is supported"
+      critical: true
+    - check: "macos_version_support"
+      description: "Confirm macOS version compatibility"
+      critical: true
+    - check: "existing_patches"
+      description: "Detect conflicting patches"
+      critical: false
+      
+  post_install:
+    - check: "kext_loading_success"
+      description: "Verify all kexts loaded successfully"
+      critical: true
+    - check: "system_stability"
+      description: "Basic system functionality test"
+      critical: true
+
+# Security and consent matrix
+security:
+  consent_levels:
+    low:
+      description: "Minor modifications with minimal risk"
+      patches:
+        - "apple_alc"
+        - "broadcom_wifi_patches"
+        - "restrict_events"
+      user_prompt: "Allow minor system modifications for hardware compatibility?"
+      
+    medium:
+      description: "Significant modifications affecting system behavior"
+      patches:
+        - "intel_5000_controller"
+        - "intel_framebuffer_patches"
+      user_prompt: "Allow graphics and system patches that modify core behavior?"
+      requires_acknowledgment: true
+      
+    high:
+      description: "Major security modifications with significant risk"
+      patches:
+        - "amfi_pass"
+        - "sip_disable"
+        - "amd_kernel_patches"
+      user_prompt: "WARNING: Allow security-bypassing patches? This significantly reduces system security."
+      requires_explicit_consent: true
+      requires_backup: true
+      show_risks: true
+      
+  risk_assessment:
+    data_loss: "low"
+    security_compromise: "medium"
+    system_instability: "medium"
+    boot_failure: "low"
+    
+# Rollback and recovery options
+recovery:
+  snapshot_before_patching: true
+  automatic_rollback_triggers:
+    - "boot_failure_count > 3"
+    - "kernel_panic_in_first_hour"
+  manual_rollback_options:
+    - "restore_from_snapshot"
+    - "disable_kexts_safe_mode"
+    - "csrutil_enable_recovery"

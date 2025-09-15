@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple, Any, Union
 from dataclasses import dataclass, field
 from enum import Enum
 
-from src.core.usb_builder import HardwareProfile
+from src.core.models import HardwareProfile
 
 
 class DetectionConfidence(Enum):

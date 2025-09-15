@@ -17,6 +17,10 @@ from src.core.os_image_manager import (
     OSImageProvider, OSImageInfo, ImageStatus, VerificationMethod
 )
 from src.core.config import Config
+from src.core.patch_pipeline import PatchPlanner
+from src.core.hardware_detector import DetectedHardware
+from src.core.models import HardwareProfile
+from src.core.safety_validator import SafetyValidator, PatchValidationMode
 
 
 class WindowsProvider(OSImageProvider):
@@ -70,6 +74,11 @@ class WindowsProvider(OSImageProvider):
         
         # Load known checksums
         self._load_checksum_database()
+        
+        # CRITICAL INTEGRATION: PatchPlanner with strict security defaults
+        safety_validator = SafetyValidator(patch_mode=PatchValidationMode.COMPLIANT)
+        self.patch_planner = PatchPlanner(safety_validator)
+        self.logger.info("WindowsProvider initialized with COMPLIANT security mode")
     
     def _load_checksum_database(self):
         """Load known Windows ISO checksums from various sources"""

@@ -2,10 +2,18 @@
 BootForge Hardware Profiles - Comprehensive Mac Model Database
 Enhanced hardware profile management with detailed Mac model specifications,
 patch requirements, and OCLP compatibility mapping.
+Integrated with patch pipeline system for universal OS deployment.
 """
 
-from .usb_builder import HardwareProfile, DeploymentType
+from .models import HardwareProfile, DeploymentType
+from .patch_pipeline import (
+    PatchSet, PatchAction, PatchType, PatchPhase, PatchPriority, 
+    PatchCondition, PatchStatus
+)
+from .vendor_database import PatchCapability, SecurityLevel, PatchCompatibility
 from typing import List, Dict, Optional, Any
+import re
+import logging
 
 
 def get_mac_model_data() -> Dict[str, Dict[str, Any]]:
@@ -1296,3 +1304,386 @@ def get_optimal_macos_version_recommendation(model: str) -> Dict[str, Any]:
         })
     
     return recommendation
+
+
+# ===== PATCH PIPELINE INTEGRATION =====
+
+def create_mac_patch_sets() -> List[PatchSet]:
+    """Convert Mac model data into PatchSet format for patch pipeline"""
+    logger = logging.getLogger(__name__)
+    patch_sets = []
+    
+    try:
+        mac_data = get_mac_model_data()
+        
+        # Group models by similar patch requirements
+        patch_groups = _group_models_by_patches(mac_data)
+        
+        for group_name, models in patch_groups.items():
+            # Create patch set for this group
+            patch_set = _create_patch_set_for_group(group_name, models)
+            if patch_set:
+                patch_sets.append(patch_set)
+                logger.debug(f"Created patch set: {patch_set.id}")
+        
+        logger.info(f"Created {len(patch_sets)} Mac patch sets")
+        return patch_sets
+        
+    except Exception as e:
+        logger.error(f"Failed to create Mac patch sets: {e}")
+        return []
+
+
+def _group_models_by_patches(mac_data: Dict[str, Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Group Mac models with similar patch requirements"""
+    groups = {}
+    
+    for model_id, model_data in mac_data.items():
+        # Create a signature based on patch requirements
+        patch_signature = _create_patch_signature(model_data)
+        
+        if patch_signature not in groups:
+            groups[patch_signature] = []
+        
+        # Add model with ID
+        model_data_with_id = model_data.copy()
+        model_data_with_id["model_id"] = model_id
+        groups[patch_signature].append(model_data_with_id)
+    
+    return groups
+
+
+def _create_patch_signature(model_data: Dict[str, Any]) -> str:
+    """Create a signature string based on patch requirements"""
+    signature_parts = []
+    
+    # Include major patch categories
+    graphics_patches = model_data.get("graphics_patches", [])
+    audio_patches = model_data.get("audio_patches", [])
+    wifi_patches = model_data.get("wifi_bluetooth_patches", [])
+    
+    # Create signature from patch types
+    if graphics_patches:
+        signature_parts.append(f"gfx:{':'.join(sorted(graphics_patches))}")
+    if audio_patches:
+        signature_parts.append(f"audio:{':'.join(sorted(audio_patches))}")
+    if wifi_patches:
+        signature_parts.append(f"wifi:{':'.join(sorted(wifi_patches))}")
+    
+    # Include architecture and year range
+    arch = model_data.get("architecture", "unknown")
+    year = model_data.get("year", 0)
+    year_range = f"{(year // 5) * 5}-{((year // 5) + 1) * 5 - 1}"  # Group by 5-year ranges
+    
+    signature_parts.extend([f"arch:{arch}", f"year:{year_range}"])
+    
+    return "|".join(signature_parts)
+
+
+def _create_patch_set_for_group(group_name: str, models: List[Dict[str, Any]]) -> Optional[PatchSet]:
+    """Create a PatchSet for a group of similar models"""
+    try:
+        if not models:
+            return None
+        
+        # Use first model as representative
+        representative = models[0]
+        
+        # Create patch set ID
+        patch_set_id = f"macos_{group_name.replace('|', '_').replace(':', '_')}"
+        patch_set_id = re.sub(r'[^a-zA-Z0-9_]', '_', patch_set_id)[:50]  # Sanitize and limit length
+        
+        # Create patch set name
+        model_names = [model.get("name", "Unknown") for model in models[:3]]  # First 3 models
+        if len(models) > 3:
+            model_names.append(f"and {len(models) - 3} more")
+        patch_set_name = f"macOS Patches for {', '.join(model_names)}"
+        
+        # Create target hardware patterns
+        target_hardware = [model["model_id"] for model in models]
+        
+        # Create patch actions from model data
+        actions = []
+        actions.extend(_create_graphics_actions(representative))
+        actions.extend(_create_audio_actions(representative))
+        actions.extend(_create_wifi_actions(representative))
+        actions.extend(_create_system_actions(representative))
+        
+        # Create patch set
+        patch_set = PatchSet(
+            id=patch_set_id,
+            name=patch_set_name,
+            description=f"Hardware-specific patches for {len(models)} Mac models",
+            version="1.0.0",
+            target_os="macos",
+            target_versions=_get_supported_macos_versions(models),
+            target_hardware=target_hardware,
+            actions=actions,
+            author="BootForge",
+            created_at=1234567890.0  # Placeholder timestamp
+        )
+        
+        return patch_set
+        
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Failed to create patch set for group {group_name}: {e}")
+        return None
+
+
+def _create_graphics_actions(model_data: Dict[str, Any]) -> List[PatchAction]:
+    """Create graphics-related patch actions"""
+    actions = []
+    graphics_patches = model_data.get("graphics_patches", [])
+    
+    for patch_name in graphics_patches:
+        action = PatchAction(
+            id=f"graphics_{patch_name.lower()}",
+            name=f"Graphics Patch: {patch_name}",
+            description=f"Install {patch_name} for graphics compatibility",
+            patch_type=PatchType.KEXT_INJECTION,
+            phase=PatchPhase.POST_INSTALL,
+            priority=PatchPriority.CRITICAL,
+            source_files=[f"{patch_name}.kext"],
+            target_path="/System/Library/Extensions/",
+            reversible=True,
+            requires_reboot=True,
+            conditions=PatchCondition(
+                os_version="1[1-4]\..*",  # macOS 11-14
+                required_firmware="UEFI"
+            )
+        )
+        actions.append(action)
+    
+    return actions
+
+
+def _create_audio_actions(model_data: Dict[str, Any]) -> List[PatchAction]:
+    """Create audio-related patch actions"""
+    actions = []
+    audio_patches = model_data.get("audio_patches", [])
+    
+    for patch_name in audio_patches:
+        action = PatchAction(
+            id=f"audio_{patch_name.lower()}",
+            name=f"Audio Patch: {patch_name}",
+            description=f"Install {patch_name} for audio functionality",
+            patch_type=PatchType.KEXT_INJECTION,
+            phase=PatchPhase.POST_INSTALL,
+            priority=PatchPriority.HIGH,
+            source_files=[f"{patch_name}.kext"],
+            target_path="/System/Library/Extensions/",
+            reversible=True,
+            requires_reboot=True
+        )
+        actions.append(action)
+    
+    return actions
+
+
+def _create_wifi_actions(model_data: Dict[str, Any]) -> List[PatchAction]:
+    """Create WiFi/Bluetooth-related patch actions"""
+    actions = []
+    wifi_patches = model_data.get("wifi_bluetooth_patches", [])
+    
+    for patch_name in wifi_patches:
+        action = PatchAction(
+            id=f"wifi_{patch_name.lower()}",
+            name=f"WiFi/Bluetooth Patch: {patch_name}",
+            description=f"Install {patch_name} for network connectivity",
+            patch_type=PatchType.KEXT_INJECTION,
+            phase=PatchPhase.POST_INSTALL,
+            priority=PatchPriority.HIGH,
+            source_files=[f"{patch_name}.kext"],
+            target_path="/System/Library/Extensions/",
+            reversible=True,
+            requires_reboot=True
+        )
+        actions.append(action)
+    
+    return actions
+
+
+def _create_system_actions(model_data: Dict[str, Any]) -> List[PatchAction]:
+    """Create system-level patch actions"""
+    actions = []
+    
+    # Get required patches by macOS version
+    required_patches = model_data.get("required_patches", {})
+    
+    for os_version, patch_list in required_patches.items():
+        for patch_name in patch_list:
+            # Determine patch type based on name
+            if "AMFI" in patch_name:
+                patch_type = PatchType.KERNEL_PATCH
+                priority = PatchPriority.CRITICAL
+            elif "Fixup" in patch_name:
+                patch_type = PatchType.KEXT_INJECTION
+                priority = PatchPriority.HIGH
+            else:
+                patch_type = PatchType.SYSTEM_FILE
+                priority = PatchPriority.MEDIUM
+            
+            action = PatchAction(
+                id=f"system_{patch_name.lower()}_{os_version.replace('.', '_')}",
+                name=f"System Patch: {patch_name}",
+                description=f"Install {patch_name} for macOS {os_version} compatibility",
+                patch_type=patch_type,
+                phase=PatchPhase.POST_INSTALL,
+                priority=priority,
+                source_files=[f"{patch_name}.kext"],
+                target_path="/System/Library/Extensions/",
+                reversible=True,
+                requires_reboot=True,
+                conditions=PatchCondition(
+                    os_version=os_version.replace(".", r"\.") + r"\..*"
+                )
+            )
+            actions.append(action)
+    
+    # Add SIP disable action if required
+    if model_data.get("sip_requirements") == "disabled":
+        sip_action = PatchAction(
+            id="disable_sip",
+            name="Disable System Integrity Protection",
+            description="Disable SIP to allow kernel extensions loading",
+            patch_type=PatchType.CONFIG_PATCH,
+            phase=PatchPhase.PRE_INSTALL,
+            priority=PatchPriority.CRITICAL,
+            command="csrutil disable",
+            reversible=True,
+            requires_reboot=True
+        )
+        actions.append(sip_action)
+    
+    return actions
+
+
+def _get_supported_macos_versions(models: List[Dict[str, Any]]) -> List[str]:
+    """Get supported macOS versions for a group of models"""
+    all_versions = set()
+    
+    for model in models:
+        # Get versions from native support
+        native_support = model.get("native_macos_support", {})
+        for version, supported in native_support.items():
+            if supported:
+                all_versions.add(version)
+        
+        # Get versions from required patches (OCLP support)
+        required_patches = model.get("required_patches", {})
+        for version in required_patches.keys():
+            all_versions.add(version)
+    
+    # Convert to patterns
+    version_patterns = []
+    for version in sorted(all_versions):
+        if "." in version:
+            # Convert version like "11.0" to pattern "11\..*"
+            pattern = version.replace(".", r"\.") + r"\..*"
+        else:
+            # Single number version
+            pattern = f"{version}\..*"
+        version_patterns.append(pattern)
+    
+    return version_patterns
+
+
+def get_hardware_patch_compatibility(model_id: str) -> Optional[PatchCompatibility]:
+    """Get patch compatibility information for a specific Mac model"""
+    try:
+        mac_data = get_mac_model_data()
+        model_data = mac_data.get(model_id)
+        
+        if not model_data:
+            return None
+        
+        # Create patch compatibility based on model data
+        capabilities = set()
+        
+        # All Mac models support kext loading
+        capabilities.add(PatchCapability.KEXT_LOADING)
+        
+        # Models with OCLP support can do EFI modifications
+        if model_data.get("oclp_compatibility") in ["fully_supported", "partially_supported"]:
+            capabilities.add(PatchCapability.EFI_MODIFICATION)
+            capabilities.add(PatchCapability.CUSTOM_SCRIPTS)
+        
+        # Newer models (T2 chip) have stricter security
+        security_level = SecurityLevel.STRICT
+        if "T2" in str(model_data.get("notes", [])):
+            security_level = SecurityLevel.STRICT
+        elif model_data.get("year", 0) < 2018:
+            security_level = SecurityLevel.MODERATE
+        
+        # Create macOS support mapping
+        macos_support = {}
+        native_support = model_data.get("native_macos_support", {})
+        required_patches = model_data.get("required_patches", {})
+        
+        for version in set(list(native_support.keys()) + list(required_patches.keys())):
+            features = []
+            if native_support.get(version, False):
+                features.append("native_support")
+            if version in required_patches:
+                features.extend(["oclp_patches", "kext_injection"])
+            
+            if features:
+                macos_support[version] = features
+        
+        return PatchCompatibility(
+            supported_capabilities=capabilities,
+            security_level=security_level,
+            macos_support=macos_support,
+            requires_signed_drivers=False,  # macOS allows unsigned kexts with SIP disabled
+            requires_sip_disabled=(model_data.get("sip_requirements") == "disabled"),
+            tested_versions=list(macos_support.keys())
+        )
+        
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Failed to get patch compatibility for {model_id}: {e}")
+        return None
+
+
+def create_mac_hardware_profile(model: str) -> HardwareProfile:
+    """Create hardware profile from Mac model identifier (moved from models to break circular import)"""
+    mac_profiles = get_mac_model_data()
+    
+    profile_data = mac_profiles.get(model, {"name": model, "year": None, "cpu_family": "Unknown"})
+    
+    # Get patch compatibility for this model
+    patch_compatibility = get_hardware_patch_compatibility(model)
+    
+    # Extract supported OS versions
+    supported_versions = []
+    native_support = profile_data.get("native_macos_support", {})
+    required_patches = profile_data.get("required_patches", {})
+    for version in set(list(native_support.keys()) + list(required_patches.keys())):
+        if native_support.get(version, False) or version in required_patches:
+            supported_versions.append(version)
+    
+    return HardwareProfile(
+        name=profile_data.get("name", model),
+        platform="mac",
+        model=model,
+        architecture="x86_64" if "Intel" in profile_data.get("cpu_family", "") else "arm64",
+        year=profile_data.get("year"),
+        cpu_family=profile_data.get("cpu_family"),
+        
+        # Mac-specific fields
+        oclp_compatibility=profile_data.get("oclp_compatibility"),
+        native_macos_support=profile_data.get("native_macos_support", {}),
+        required_patches=profile_data.get("required_patches", {}),
+        optional_patches=profile_data.get("optional_patches", {}),
+        graphics_patches=profile_data.get("graphics_patches", []),
+        audio_patches=profile_data.get("audio_patches", []),
+        wifi_bluetooth_patches=profile_data.get("wifi_bluetooth_patches", []),
+        usb_patches=profile_data.get("usb_patches", []),
+        secure_boot_model=profile_data.get("secure_boot_model"),
+        sip_requirements=profile_data.get("sip_requirements"),
+        notes=profile_data.get("notes", []),
+        
+        # Patch pipeline integration
+        patch_compatibility=patch_compatibility,
+        supported_os_versions=supported_versions,
+        deployment_type="macos_oclp" if profile_data.get("oclp_compatibility") else "macos_native"
+    )

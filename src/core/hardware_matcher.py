@@ -11,7 +11,7 @@ from enum import Enum
 
 from src.core.hardware_detector import DetectedHardware, DetectionConfidence, ProfileMatch
 from src.core.vendor_database import VendorDatabase
-from src.core.usb_builder import HardwareProfile
+from src.core.models import HardwareProfile
 from src.core.hardware_profiles import get_default_profiles, get_profiles_by_platform
 
 

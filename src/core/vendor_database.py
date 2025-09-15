@@ -1,37 +1,125 @@
 """
 BootForge Vendor/Device ID Database
 Comprehensive hardware identification database for mapping device IDs to vendor names and models
+Enhanced with patch capability flags for hardware-specific OS modifications
 """
 
 import re
 import logging
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Set
 from dataclasses import dataclass, field
+from enum import Enum
+
+
+class PatchCapability(Enum):
+    """Hardware patch capabilities"""
+    DRIVER_INJECTION = "driver_injection"        # Supports driver injection
+    KERNEL_PATCHING = "kernel_patching"          # Supports kernel patches
+    EFI_MODIFICATION = "efi_modification"        # Supports EFI/bootloader mods
+    FIRMWARE_UPDATE = "firmware_update"          # Supports firmware updates
+    KEXT_LOADING = "kext_loading"                # Supports macOS kernel extensions
+    REGISTRY_PATCHING = "registry_patching"      # Supports Windows registry mods
+    SECURE_BOOT_BYPASS = "secure_boot_bypass"    # Can bypass secure boot
+    SIGNATURE_BYPASS = "signature_bypass"        # Can bypass code signing
+    CUSTOM_SCRIPTS = "custom_scripts"            # Supports custom scripts
+
+
+class SecurityLevel(Enum):
+    """Hardware security levels"""
+    OPEN = "open"                    # No restrictions, full patch support
+    MODERATE = "moderate"            # Some restrictions, requires validation
+    STRICT = "strict"                # High restrictions, limited patching
+    LOCKED = "locked"                # Highly restricted, minimal patching
+
+
+@dataclass
+class PatchCompatibility:
+    """Patch compatibility information for hardware"""
+    supported_capabilities: Set[PatchCapability] = field(default_factory=set)
+    security_level: SecurityLevel = SecurityLevel.MODERATE
+    
+    # OS-specific compatibility
+    macos_support: Dict[str, List[str]] = field(default_factory=dict)  # version -> supported features
+    windows_support: Dict[str, List[str]] = field(default_factory=dict)
+    linux_support: Dict[str, List[str]] = field(default_factory=dict)
+    
+    # Restrictions and requirements
+    requires_signed_drivers: bool = True
+    requires_secure_boot_off: bool = False
+    requires_sip_disabled: bool = False         # macOS System Integrity Protection
+    requires_test_signing: bool = False         # Windows test signing mode
+    
+    # Known issues and limitations
+    known_issues: List[str] = field(default_factory=list)
+    workarounds: List[str] = field(default_factory=list)
+    tested_versions: List[str] = field(default_factory=list)
+    
+    def supports_capability(self, capability: PatchCapability) -> bool:
+        """Check if hardware supports a specific patch capability"""
+        return capability in self.supported_capabilities
+    
+    def get_os_support(self, os_family: str, os_version: str) -> List[str]:
+        """Get supported features for specific OS version"""
+        os_support_map = {
+            "macos": self.macos_support,
+            "windows": self.windows_support,
+            "linux": self.linux_support
+        }
+        
+        support_dict = os_support_map.get(os_family.lower(), {})
+        
+        # Try exact version match first
+        if os_version in support_dict:
+            return support_dict[os_version]
+        
+        # Try pattern matching for version ranges
+        for version_pattern, features in support_dict.items():
+            if re.match(version_pattern, os_version):
+                return features
+        
+        return []
 
 
 @dataclass
 class VendorInfo:
-    """Vendor information structure"""
+    """Enhanced vendor information structure with patch capabilities"""
     vendor_id: str
     name: str
     full_name: Optional[str] = None
     website: Optional[str] = None
     aliases: List[str] = field(default_factory=list)
     
+    # Patch-related information
+    patch_compatibility: Optional[PatchCompatibility] = None
+    driver_support_url: Optional[str] = None
+    patch_documentation: Optional[str] = None
+    
     def __post_init__(self):
         if self.aliases is None:
             self.aliases = []
+        if self.patch_compatibility is None:
+            self.patch_compatibility = PatchCompatibility()
 
 
 @dataclass
 class DeviceInfo:
-    """Device information structure"""
+    """Enhanced device information structure with patch capabilities"""
     vendor_id: str
     device_id: str
     name: str
     category: str
     subsystem_vendor: Optional[str] = None
     subsystem_device: Optional[str] = None
+    
+    # Patch-related information
+    patch_compatibility: Optional[PatchCompatibility] = None
+    driver_package: Optional[str] = None            # Driver package name/ID
+    firmware_version: Optional[str] = None          # Current/required firmware version
+    patch_notes: Optional[str] = None               # Special patching notes
+    
+    def __post_init__(self):
+        if self.patch_compatibility is None:
+            self.patch_compatibility = PatchCompatibility()
 
 
 class VendorDatabase:
@@ -102,12 +190,16 @@ class VendorDatabase:
         ]
         
         for vendor_id, name, full_name, website, aliases in vendors:
+            # Create enhanced vendor info with patch capabilities
+            patch_compat = self._create_vendor_patch_compatibility(vendor_id, name)
+            
             self._vendors[vendor_id.upper()] = VendorInfo(
                 vendor_id=vendor_id.upper(),
                 name=name,
                 full_name=full_name,
                 website=website,
-                aliases=aliases
+                aliases=aliases,
+                patch_compatibility=patch_compat
             )
     
     def _init_pci_devices(self):
@@ -606,3 +698,228 @@ class VendorDatabase:
             return int(amd_match.group(1))
         
         return None
+    
+    # ===== PATCH CAPABILITY METHODS =====
+    
+    def _create_vendor_patch_compatibility(self, vendor_id: str, vendor_name: str) -> PatchCompatibility:
+        """Create patch compatibility information for a vendor"""
+        try:
+            # Create default compatibility with vendor-specific capabilities
+            capabilities = set()
+            security_level = SecurityLevel.MODERATE
+            
+            # Set capabilities based on vendor
+            vendor_lower = vendor_name.lower()
+            
+            if vendor_lower in ["intel", "amd"]:
+                # CPU/Chipset vendors - support most patching
+                capabilities.update([
+                    PatchCapability.DRIVER_INJECTION,
+                    PatchCapability.KERNEL_PATCHING,
+                    PatchCapability.EFI_MODIFICATION,
+                    PatchCapability.REGISTRY_PATCHING,
+                    PatchCapability.CUSTOM_SCRIPTS
+                ])
+                security_level = SecurityLevel.MODERATE
+                
+            elif vendor_lower in ["nvidia", "ati", "amd"]:
+                # GPU vendors - support driver injection and some patches
+                capabilities.update([
+                    PatchCapability.DRIVER_INJECTION,
+                    PatchCapability.KERNEL_PATCHING,
+                    PatchCapability.KEXT_LOADING,
+                    PatchCapability.REGISTRY_PATCHING
+                ])
+                security_level = SecurityLevel.MODERATE
+                
+            elif vendor_lower in ["broadcom", "realtek", "atheros", "qualcomm"]:
+                # Network vendors - mainly driver injection
+                capabilities.update([
+                    PatchCapability.DRIVER_INJECTION,
+                    PatchCapability.KEXT_LOADING,
+                    PatchCapability.REGISTRY_PATCHING
+                ])
+                security_level = SecurityLevel.MODERATE
+                
+            elif vendor_lower == "apple":
+                # Apple hardware - limited patching due to security
+                capabilities.update([
+                    PatchCapability.KEXT_LOADING,
+                    PatchCapability.EFI_MODIFICATION,
+                    PatchCapability.CUSTOM_SCRIPTS
+                ])
+                security_level = SecurityLevel.STRICT
+                
+            else:
+                # Generic vendors - basic capabilities
+                capabilities.update([
+                    PatchCapability.DRIVER_INJECTION,
+                    PatchCapability.REGISTRY_PATCHING
+                ])
+                security_level = SecurityLevel.MODERATE
+            
+            # Create OS-specific support mapping
+            macos_support = {}
+            windows_support = {}
+            linux_support = {}
+            
+            if PatchCapability.KEXT_LOADING in capabilities:
+                macos_support.update({
+                    "11.*": ["kext_injection", "sip_bypass"],
+                    "12.*": ["kext_injection", "sip_bypass"], 
+                    "13.*": ["kext_injection", "sip_bypass"],
+                    "14.*": ["kext_injection", "sip_bypass"]
+                })
+            
+            if PatchCapability.DRIVER_INJECTION in capabilities:
+                windows_support.update({
+                    "10.*": ["driver_injection", "registry_patch"],
+                    "11.*": ["driver_injection", "registry_patch"]
+                })
+                linux_support.update({
+                    ".*": ["driver_injection", "kernel_module"]
+                })
+            
+            return PatchCompatibility(
+                supported_capabilities=capabilities,
+                security_level=security_level,
+                macos_support=macos_support,
+                windows_support=windows_support,
+                linux_support=linux_support,
+                requires_signed_drivers=(security_level != SecurityLevel.OPEN),
+                requires_secure_boot_off=(PatchCapability.SECURE_BOOT_BYPASS in capabilities),
+                requires_sip_disabled=(PatchCapability.KEXT_LOADING in capabilities)
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Failed to create patch compatibility for {vendor_name}: {e}")
+            return PatchCompatibility()  # Return default compatibility
+    
+    def get_vendor_patch_capabilities(self, vendor_id: str) -> Optional[PatchCompatibility]:
+        """Get patch capabilities for a vendor"""
+        vendor = self._vendors.get(vendor_id.upper())
+        return vendor.patch_compatibility if vendor else None
+    
+    def get_device_patch_capabilities(self, vendor_id: str, device_id: str) -> Optional[PatchCompatibility]:
+        """Get patch capabilities for a specific device"""
+        device_key = f"{vendor_id.upper()}:{device_id.upper()}"
+        device = self._devices.get(device_key)
+        
+        if device and device.patch_compatibility:
+            return device.patch_compatibility
+        
+        # Fall back to vendor capabilities
+        return self.get_vendor_patch_capabilities(vendor_id)
+    
+    def check_patch_support(self, vendor_id: str, device_id: str, 
+                          capability: PatchCapability) -> bool:
+        """Check if a device supports a specific patch capability"""
+        patch_compat = self.get_device_patch_capabilities(vendor_id, device_id)
+        return patch_compat.supports_capability(capability) if patch_compat else False
+    
+    def get_os_patch_support(self, vendor_id: str, device_id: str,
+                           os_family: str, os_version: str) -> List[str]:
+        """Get OS-specific patch support for a device"""
+        patch_compat = self.get_device_patch_capabilities(vendor_id, device_id)
+        return patch_compat.get_os_support(os_family, os_version) if patch_compat else []
+    
+    def find_devices_with_capability(self, capability: PatchCapability) -> List[DeviceInfo]:
+        """Find all devices that support a specific patch capability"""
+        matching_devices = []
+        
+        for device in self._devices.values():
+            if device.patch_compatibility and device.patch_compatibility.supports_capability(capability):
+                matching_devices.append(device)
+        
+        return matching_devices
+    
+    def get_security_level(self, vendor_id: str, device_id: Optional[str] = None) -> SecurityLevel:
+        """Get security level for vendor or device"""
+        if device_id:
+            patch_compat = self.get_device_patch_capabilities(vendor_id, device_id)
+        else:
+            patch_compat = self.get_vendor_patch_capabilities(vendor_id)
+        
+        return patch_compat.security_level if patch_compat else SecurityLevel.STRICT
+    
+    def add_device_patch_info(self, vendor_id: str, device_id: str,
+                            patch_compatibility: PatchCompatibility,
+                            driver_package: Optional[str] = None,
+                            patch_notes: Optional[str] = None):
+        """Add or update patch information for a device"""
+        device_key = f"{vendor_id.upper()}:{device_id.upper()}"
+        device = self._devices.get(device_key)
+        
+        if device:
+            device.patch_compatibility = patch_compatibility
+            device.driver_package = driver_package
+            device.patch_notes = patch_notes
+            self.logger.info(f"Updated patch info for device: {device_key}")
+        else:
+            self.logger.warning(f"Device not found in database: {device_key}")
+    
+    def get_patch_requirements(self, vendor_id: str, device_id: str,
+                             os_family: str) -> Dict[str, bool]:
+        """Get patch requirements for a device on specific OS"""
+        patch_compat = self.get_device_patch_capabilities(vendor_id, device_id)
+        
+        if not patch_compat:
+            return {}
+        
+        requirements = {
+            "signed_drivers": patch_compat.requires_signed_drivers,
+            "secure_boot_off": patch_compat.requires_secure_boot_off,
+            "test_signing": patch_compat.requires_test_signing
+        }
+        
+        # OS-specific requirements
+        if os_family.lower() == "macos":
+            requirements["sip_disabled"] = patch_compat.requires_sip_disabled
+        elif os_family.lower() == "windows":
+            requirements["test_signing"] = patch_compat.requires_test_signing
+        
+        return requirements
+    
+    def get_patch_statistics(self) -> Dict[str, Any]:
+        """Get statistics about patch capabilities in the database"""
+        try:
+            stats = {
+                "total_vendors_with_patches": 0,
+                "total_devices_with_patches": 0,
+                "capabilities_by_count": {},
+                "security_levels": {},
+                "os_support": {"macos": 0, "windows": 0, "linux": 0}
+            }
+            
+            # Count vendors with patch capabilities
+            for vendor in self._vendors.values():
+                if vendor.patch_compatibility and vendor.patch_compatibility.supported_capabilities:
+                    stats["total_vendors_with_patches"] += 1
+            
+            # Count devices with patch capabilities
+            for device in self._devices.values():
+                if device.patch_compatibility and device.patch_compatibility.supported_capabilities:
+                    stats["total_devices_with_patches"] += 1
+                    
+                    # Count capabilities
+                    for capability in device.patch_compatibility.supported_capabilities:
+                        cap_name = capability.value
+                        stats["capabilities_by_count"][cap_name] = stats["capabilities_by_count"].get(cap_name, 0) + 1
+                    
+                    # Count security levels
+                    sec_level = device.patch_compatibility.security_level.value
+                    stats["security_levels"][sec_level] = stats["security_levels"].get(sec_level, 0) + 1
+                    
+                    # Count OS support
+                    if device.patch_compatibility.macos_support:
+                        stats["os_support"]["macos"] += 1
+                    if device.patch_compatibility.windows_support:
+                        stats["os_support"]["windows"] += 1
+                    if device.patch_compatibility.linux_support:
+                        stats["os_support"]["linux"] += 1
+            
+            return stats
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get patch statistics: {e}")
+            return {}

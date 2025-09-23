@@ -32,6 +32,7 @@ class DeploymentType(Enum):
     WINDOWS_UNATTENDED = "windows_unattended"
     LINUX_AUTOMATED = "linux_automated"
     CUSTOM_PAYLOAD = "custom_payload"
+    MULTIBOOT = "multiboot"  # Multi-boot system with GRUB
 
 
 @dataclass
@@ -206,4 +207,44 @@ class DeploymentRecipe:
             hardware_profiles=["generic_x64", "generic_linux_x64", "rpi4"],
             required_files=["bootloader", "payload.img"],
             optional_files=["config.json", "additional_files.zip"]
+        )
+    
+    @classmethod
+    def create_multiboot_recipe(cls) -> 'DeploymentRecipe':
+        """Create multi-boot deployment recipe with GRUB bootloader"""
+        return cls(
+            name="Multi-Boot System (macOS + Windows + Linux)",
+            description="Create multi-boot USB with GRUB bootloader supporting macOS, Windows, and Linux",
+            deployment_type=DeploymentType.MULTIBOOT,
+            partition_scheme=PartitionScheme.GPT,
+            partitions=[
+                PartitionInfo("EFI System", 512, FileSystem.FAT32, bootable=True, label="EFI"),
+                PartitionInfo("BIOS Boot", 2, None, label="BIOSBOOT"),  # EF02 for legacy BIOS (unformatted)
+                PartitionInfo("macOS Installer", 8192, FileSystem.HFS_PLUS, label="macOS"),
+                PartitionInfo("Windows Installer", 8192, FileSystem.NTFS, label="Windows"),
+                PartitionInfo("Linux Installer", 4096, FileSystem.EXT4, label="Linux"),
+                PartitionInfo("Shared Data", -1, FileSystem.EXFAT, label="Data")
+            ],
+            hardware_profiles=["generic_x64", "iMacPro1,1", "MacBookPro15,1", "dell_optiplex"],
+            required_files=["grub.cfg"],
+            optional_files=[
+                "macos_installer.dmg", "macos_recovery.dmg", 
+                "windows.iso", "autounattend.xml",
+                "linux.iso", "preseed.cfg",
+                "opencore-legacy-patcher.zip"
+            ],
+            verification_steps=[
+                "verify_grub_installation",
+                "verify_efi_boot_entries", 
+                "verify_os_boot_menu",
+                "test_multiboot_functionality"
+            ],
+            metadata={
+                "supports_uefi": True,
+                "supports_legacy_bios": True,
+                "bootloader": "grub2",
+                "max_os_count": 10,
+                "supports_os_detection": True,
+                "grub_modules": ["part_gpt", "part_msdos", "fat", "ext2", "ntfs", "hfsplus", "apfs", "iso9660", "configfile", "normal", "search", "search_fs_uuid", "probe"]
+            }
         )

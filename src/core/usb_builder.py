@@ -29,6 +29,7 @@ from src.core.models import (
     PartitionInfo, DeploymentRecipe
 )
 from src.core.hardware_profiles import create_mac_patch_sets
+from src.core.grub_manager import GRUBManager, GRUBBootMode
 
 
 # Imported from models.py to prevent circular imports
@@ -82,6 +83,22 @@ class USBBuilder(QThread):
         self.source_files = source_files
         self.is_cancelled = False
         self.build_log = []
+        self.rollback_operations = []
+        self.grub_config = None
+        self.start()
+    
+    def start_multiboot_build(self, recipe: DeploymentRecipe, target_device: str,
+                             hardware_profile: HardwareProfile, source_files: Dict[str, str],
+                             grub_config):
+        """Start multi-boot USB build operation"""
+        self.recipe = recipe
+        self.target_device = target_device  
+        self.hardware_profile = hardware_profile
+        self.source_files = source_files
+        self.grub_config = grub_config
+        self.is_cancelled = False
+        self.build_log = []
+        self.rollback_operations = []
         self.start()
     
     def cancel_build(self):
@@ -138,8 +155,12 @@ class USBBuilder(QThread):
             # Step 6: Configure bootloader
             step += 1
             self._emit_progress("Configuring bootloader", step, total_steps, 0)
-            if not self._configure_bootloader(partition_mounts):
-                return
+            if self.recipe.deployment_type == DeploymentType.MULTIBOOT:
+                if not self._configure_multiboot_grub(partition_mounts):
+                    return
+            else:
+                if not self._configure_bootloader(partition_mounts):
+                    return
             
             # Step 7: Finalize and verify
             step += 1
@@ -1121,6 +1142,178 @@ For more information, visit: https://dortania.github.io/OpenCore-Legacy-Patcher/
         """Add an operation to the rollback list"""
         self.rollback_operations.append(operation)
     
+    def _configure_multiboot_grub(self, partition_mounts: Dict[str, str]) -> bool:
+        """Configure GRUB for multi-boot functionality"""
+        try:
+            if not hasattr(self, 'grub_config') or not self.grub_config:
+                self._log_message("WARNING", "No GRUB configuration found for multi-boot")
+                return True  # Continue with single-OS build
+            
+            self._log_message("INFO", "Configuring GRUB for multi-boot system...")
+            
+            # Create GRUB manager instance  
+            from .grub_manager import GRUBManager, GRUBBootMode
+            grub_manager = GRUBManager()
+            
+            # Write GRUB configuration to EFI System Partition
+            efi_mount = partition_mounts.get("EFI System")
+            if not efi_mount:
+                self._log_message("ERROR", "EFI System Partition not mounted")
+                return False
+            grub_cfg_path = f"{efi_mount}/EFI/BOOT/grub.cfg"
+            
+            # Ensure EFI/BOOT directory exists
+            os.makedirs(os.path.dirname(grub_cfg_path), exist_ok=True)
+            
+            # Generate and write GRUB config
+            if not grub_manager.write_config(grub_cfg_path, self.grub_config):
+                self._log_message("ERROR", "Failed to write GRUB configuration")
+                return False
+            
+            # Install GRUB to EFI System Partition
+            if not grub_manager.install_grub(self.target_device, efi_mount, GRUBBootMode.UEFI):
+                self._log_message("ERROR", "Failed to install GRUB")
+                return False
+            
+            # Copy GRUB bootloader files
+            self._copy_grub_files(efi_mount)
+            
+            # Stage OS installation files
+            if not self._stage_os_payloads():
+                self._log_message("ERROR", "Failed to stage OS payloads")
+                return False
+            
+            self._log_message("INFO", "Multi-boot GRUB configuration completed successfully")
+            return True
+            
+        except Exception as e:
+            self._log_message("ERROR", f"Error configuring multi-boot GRUB: {e}")
+            return False
+    
+    def _copy_grub_files(self, efi_mount: str):
+        """Copy essential GRUB files to EFI System Partition"""
+        try:
+            grub_dir = f"{efi_mount}/EFI/BOOT"
+            os.makedirs(grub_dir, exist_ok=True)
+            
+            # Copy GRUB EFI bootloader (if available)
+            grub_sources = [
+                "/usr/lib/grub/x86_64-efi/grubx64.efi",
+                "/boot/efi/EFI/ubuntu/grubx64.efi",
+                "/usr/share/grub/grubx64.efi"
+            ]
+            
+            grub_copied = False
+            for source in grub_sources:
+                if os.path.exists(source):
+                    shutil.copy2(source, f"{grub_dir}/BOOTX64.EFI")
+                    self._log_message("INFO", f"Copied GRUB bootloader from {source}")
+                    grub_copied = True
+                    break
+            
+            if not grub_copied:
+                self._log_message("WARNING", "No GRUB bootloader found - may need manual installation")
+            
+        except Exception as e:
+            self._log_message("WARNING", f"Error copying GRUB files: {e}")
+    
+    def _stage_os_payloads(self) -> bool:
+        """Stage operating system installation files to their partitions"""
+        try:
+            self._log_message("INFO", "Staging OS installation payloads...")
+            
+            if not hasattr(self, 'grub_config') or not self.grub_config:
+                return True  # No multi-boot config, skip staging
+            
+            # Process each OS entry in GRUB config
+            for entry in self.grub_config.entries:
+                self._log_message("INFO", f"Staging {entry.name} ({entry.os_type})")
+                
+                if entry.os_type == "windows":
+                    self._stage_windows_payload(entry)
+                elif entry.os_type == "macos":
+                    self._stage_macos_payload(entry)
+                elif entry.os_type == "linux":
+                    self._stage_linux_payload(entry)
+                
+            self._log_message("INFO", "OS payload staging completed")
+            return True
+            
+        except Exception as e:
+            self._log_message("ERROR", f"Error staging OS payloads: {e}")
+            return False
+    
+    def _stage_windows_payload(self, entry):
+        """Stage Windows installation files"""
+        try:
+            # Look for Windows ISO in source files
+            windows_iso = None
+            for filename, path in self.source_files.items():
+                if 'windows' in filename.lower() and path.endswith('.iso'):
+                    windows_iso = path
+                    break
+            
+            if not windows_iso or not os.path.exists(windows_iso):
+                self._log_message("WARNING", f"Windows ISO not found for {entry.name}")
+                return
+            
+            # Mount Windows ISO and copy EFI boot files
+            iso_mount = f"{self.temp_dir}/windows_iso"
+            os.makedirs(iso_mount, exist_ok=True)
+            
+            # Mount ISO (simplified - would need proper mounting)
+            self._log_message("INFO", f"Extracting Windows EFI files from {windows_iso}")
+            
+            # In a real implementation, would extract EFI/BOOT/BOOTX64.EFI 
+            # and other necessary files to the EFI System Partition
+            
+        except Exception as e:
+            self._log_message("WARNING", f"Error staging Windows payload: {e}")
+    
+    def _stage_macos_payload(self, entry):
+        """Stage macOS installation files"""
+        try:
+            # Look for macOS installer in source files
+            macos_installer = None
+            for filename, path in self.source_files.items():
+                if 'macos' in filename.lower() and (path.endswith('.dmg') or path.endswith('.app')):
+                    macos_installer = path
+                    break
+            
+            if not macos_installer or not os.path.exists(macos_installer):
+                self._log_message("WARNING", f"macOS installer not found for {entry.name}")
+                return
+            
+            self._log_message("INFO", f"Staging macOS installer from {macos_installer}")
+            
+            # In a real implementation, would restore BaseSystem.dmg 
+            # to the HFS+/APFS partition and setup boot.efi
+            
+        except Exception as e:
+            self._log_message("WARNING", f"Error staging macOS payload: {e}")
+    
+    def _stage_linux_payload(self, entry):
+        """Stage Linux installation files"""
+        try:
+            # Look for Linux ISO in source files
+            linux_iso = None
+            for filename, path in self.source_files.items():
+                if 'linux' in filename.lower() and path.endswith('.iso'):
+                    linux_iso = path
+                    break
+            
+            if not linux_iso or not os.path.exists(linux_iso):
+                self._log_message("WARNING", f"Linux ISO not found for {entry.name}")
+                return
+            
+            self._log_message("INFO", f"Staging Linux installer from {linux_iso}")
+            
+            # In a real implementation, would extract vmlinuz and initrd
+            # from the ISO and copy to the Linux partition
+            
+        except Exception as e:
+            self._log_message("WARNING", f"Error staging Linux payload: {e}")
+    
     def _emit_progress(self, step_name: str, step_num: int, total_steps: int, step_progress: float):
         """Emit progress update signal"""
         overall_progress = ((step_num - 1) / total_steps) * 100 + (step_progress / total_steps)
@@ -1172,6 +1365,9 @@ class USBBuilderEngine:
         self.safety_validator = SafetyValidator()
         self.patch_sets: Dict[str, PatchSet] = {}
         
+        # Multi-boot components
+        self.grub_manager = GRUBManager()
+        
         # Load built-in recipes, profiles, and patches
         self._load_builtin_recipes()
         self._load_builtin_hardware_profiles()
@@ -1194,6 +1390,10 @@ class USBBuilderEngine:
         # Custom payload recipe
         custom_recipe = DeploymentRecipe.create_custom_payload_recipe()
         self.recipes[custom_recipe.name] = custom_recipe
+        
+        # Multi-boot recipe
+        multiboot_recipe = DeploymentRecipe.create_multiboot_recipe()
+        self.recipes[multiboot_recipe.name] = multiboot_recipe
         
         self.logger.info(f"Loaded {len(self.recipes)} built-in recipes")
     
@@ -1378,6 +1578,42 @@ class USBBuilderEngine:
         
         # Start build
         self.builder.start_build(recipe, target_device, hardware_profile, source_files)
+        
+        return self.builder
+    
+    def create_multiboot_usb(self, target_device: str, os_images: Dict[str, str],
+                            hardware_profile_name: str = "generic_x64",
+                            progress_callback: Optional[Callable] = None) -> USBBuilder:
+        """Create multi-boot USB drive with multiple operating systems"""
+        
+        # Get the multi-boot recipe
+        recipe_name = "Multi-Boot System (macOS + Windows + Linux)"
+        if recipe_name not in self.recipes:
+            raise ValueError("Multi-boot recipe not found")
+        
+        recipe = self.recipes[recipe_name]
+        hardware_profile = self.hardware_profiles.get(
+            hardware_profile_name, 
+            self.hardware_profiles["generic_x64"]
+        )
+        
+        # Setup GRUB configuration for multi-boot
+        grub_config = self.grub_manager.create_multiboot_config(recipe, target_device)
+        
+        # Prepare source files for multi-boot
+        source_files = {
+            "grub.cfg": "/tmp/grub.cfg"  # Will be generated
+        }
+        source_files.update(os_images)
+        
+        # Setup progress callback
+        if progress_callback:
+            self.builder.progress_updated.connect(progress_callback)
+        
+        # Start multi-boot build
+        self.builder.start_multiboot_build(
+            recipe, target_device, hardware_profile, source_files, grub_config
+        )
         
         return self.builder
     

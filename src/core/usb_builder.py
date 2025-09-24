@@ -437,14 +437,13 @@ class StorageBuilder(QThread):
                         self._log_message("ERROR", f"Partition device not found: {partition_device}")
                         return False
                 
-                self._log_message("INFO", f"Formatting {partition_device} as {partition.filesystem.value}")
-                
                 # Skip formatting if filesystem is None (e.g., BIOS boot partition)
-            if partition.filesystem is not None:
-                if not self._format_partition(partition_device, partition):
-                    return False
-            else:
-                self._log_message("INFO", f"Skipping format for {partition_device} (unformatted partition)")
+                if partition.filesystem is not None:
+                    self._log_message("INFO", f"Formatting {partition_device} as {partition.filesystem.value}")
+                    if not self._format_partition(partition_device, partition):
+                        return False
+                else:
+                    self._log_message("INFO", f"Skipping format for {partition_device} (unformatted partition)")
             
             return True
             

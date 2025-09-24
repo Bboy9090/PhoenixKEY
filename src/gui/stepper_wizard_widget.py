@@ -33,7 +33,7 @@ from src.gui.os_image_manager_qt import OSImageManagerQt
 from src.core.os_image_manager import OSImageInfo, ImageStatus, VerificationMethod, DownloadProgress
 from src.core.config import Config
 from src.core.safety_validator import SafetyValidator, SafetyLevel, ValidationResult, DeviceRisk
-from src.core.usb_builder import USBBuilderEngine, DeploymentRecipe, DeploymentType, HardwareProfile, USBBuilder
+from src.core.usb_builder import StorageBuilderEngine, DeploymentRecipe, DeploymentType, HardwareProfile, StorageBuilder
 
 
 class StepView(QWidget):
@@ -1816,32 +1816,40 @@ class OSImageSelectionStepView(StepView):
             self.download_worker.cancel_downloads()
 
 
-class USBDeviceDetectionWorker(QThread):
-    """Worker thread for USB device detection"""
+class StorageDeviceDetectionWorker(QThread):
+    """Worker thread for storage device detection (USB, HDD, SSD, etc.)"""
     
     # Signals
     devices_detected = pyqtSignal(list)  # List of DiskInfo objects
     detection_failed = pyqtSignal(str)  # Error message
     
-    def __init__(self):
+    def __init__(self, include_all_drives: bool = False):
         super().__init__()
         self.disk_manager = DiskManager()
+        self.include_all_drives = include_all_drives
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
     
     def run(self):
-        """Detect USB devices"""
+        """Detect storage devices"""
         try:
-            self.logger.info("Starting USB device detection...")
-            usb_devices = self.disk_manager.get_removable_drives()
-            self.devices_detected.emit(usb_devices)
-            self.logger.info(f"Detected {len(usb_devices)} USB devices")
+            self.logger.info("Starting storage device detection...")
+            if self.include_all_drives:
+                # Get all storage devices including fixed drives
+                storage_devices = self.disk_manager.get_all_storage_drives(include_system_drives=False)
+                self.logger.info(f"Detected {len(storage_devices)} total storage devices")
+            else:
+                # Get only removable drives (backward compatibility)
+                storage_devices = self.disk_manager.get_removable_drives()
+                self.logger.info(f"Detected {len(storage_devices)} removable storage devices")
+                
+            self.devices_detected.emit(storage_devices)
         except Exception as e:
-            self.logger.error(f"USB device detection failed: {e}")
+            self.logger.error(f"Storage device detection failed: {e}")
             self.detection_failed.emit(str(e))
 
 
-class USBConfigurationStepView(StepView):
-    """Enhanced USB configuration step with comprehensive device management and recipe selection"""
+class StorageConfigurationStepView(StepView):
+    """Enhanced storage device configuration step with comprehensive device management and recipe selection"""
     
     # Signals for communication
     device_safety_checked = pyqtSignal(object)  # DeviceRisk object
@@ -1849,14 +1857,14 @@ class USBConfigurationStepView(StepView):
     
     def __init__(self):
         super().__init__(
-            "USB Configuration", 
-            "Select your USB device and configure the deployment recipe for your hardware."
+            "Storage Device Configuration", 
+            "Select your storage device (USB, HDD, SSD) and configure the deployment recipe for your hardware."
         )
         
         # Core components
         self.disk_manager = DiskManager()
         self.safety_validator = SafetyValidator(SafetyLevel.STANDARD)
-        self.usb_builder = USBBuilderEngine()
+        self.storage_builder = StorageBuilderEngine()
         
         # State variables
         self.detected_hardware = None
@@ -1901,7 +1909,7 @@ class USBConfigurationStepView(StepView):
         
         # Header with refresh button
         header_layout = QHBoxLayout()
-        device_title = QLabel("USB Devices")
+        device_title = QLabel("Storage Devices")
         device_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffffff; margin-bottom: 10px;")
         header_layout.addWidget(device_title)
         
@@ -1915,7 +1923,7 @@ class USBConfigurationStepView(StepView):
         device_layout.addLayout(header_layout)
         
         # Device detection status
-        self.device_status_label = QLabel("Detecting USB devices...")
+        self.device_status_label = QLabel("Detecting storage devices...")
         self.device_status_label.setStyleSheet("color: #cccccc; font-size: 14px; margin-bottom: 10px;")
         device_layout.addWidget(self.device_status_label)
         
@@ -2000,9 +2008,9 @@ class USBConfigurationStepView(StepView):
         parent.addWidget(recipe_widget)
     
     def _refresh_devices(self):
-        """Refresh USB device list"""
-        self.logger.info("Refreshing USB devices...")
-        self.device_status_label.setText("🔍 Detecting USB devices...")
+        """Refresh storage device list"""
+        self.logger.info("Refreshing storage devices...")
+        self.device_status_label.setText("🔍 Detecting storage devices...")
         self.refresh_devices_button.setEnabled(False)
         
         # Clear current devices
@@ -2018,22 +2026,22 @@ class USBConfigurationStepView(StepView):
             self.detection_worker.quit()
             self.detection_worker.wait()
         
-        self.detection_worker = USBDeviceDetectionWorker()
+        self.detection_worker = StorageDeviceDetectionWorker(include_all_drives=True)
         self.detection_worker.devices_detected.connect(self._on_devices_detected)
         self.detection_worker.detection_failed.connect(self._on_detection_failed)
         self.detection_worker.finished.connect(self._on_detection_finished)
         self.detection_worker.start()
     
     def _on_devices_detected(self, devices: List[DiskInfo]):
-        """Handle detected USB devices"""
+        """Handle detected storage devices"""
         self.available_devices = devices
-        self.logger.info(f"Detected {len(devices)} USB devices")
+        self.logger.info(f"Detected {len(devices)} storage devices")
         
         if not devices:
-            self.device_status_label.setText("⚠️ No USB devices detected. Please connect a USB drive and refresh.")
+            self.device_status_label.setText("⚠️ No storage devices detected. Please connect a storage device and refresh.")
             return
         
-        self.device_status_label.setText(f"✅ Found {len(devices)} USB device(s)")
+        self.device_status_label.setText(f"✅ Found {len(devices)} storage device(s)")
         
         # Populate device list
         for device in devices:
@@ -2522,14 +2530,14 @@ class USBConfigurationStepView(StepView):
     
     def on_step_entered(self):
         """Called when step becomes active"""
-        self.logger.info("USB Configuration step entered")
+        self.logger.info("Storage Device Configuration step entered")
         
         # Start device detection automatically
         QTimer.singleShot(500, self._refresh_devices)
     
     def on_step_left(self):
         """Called when leaving step"""
-        self.logger.info("USB Configuration step exited")
+        self.logger.info("Storage Device Configuration step exited")
         
         # Clean up detection worker
         if self.detection_worker and self.detection_worker.isRunning():

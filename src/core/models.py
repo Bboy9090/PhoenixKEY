@@ -40,7 +40,7 @@ class PartitionInfo:
     """Partition configuration"""
     name: str
     size_mb: int
-    filesystem: FileSystem
+    filesystem: Optional[FileSystem]
     bootable: bool = False
     label: str = ""
     mount_point: Optional[str] = None

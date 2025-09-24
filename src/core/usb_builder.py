@@ -156,7 +156,7 @@ class StorageBuilder(QThread):
             # Step 6: Configure bootloader
             step += 1
             self._emit_progress("Configuring bootloader", step, total_steps, 0)
-            if self.recipe.deployment_type == DeploymentType.MULTIBOOT:
+            if self.recipe and self.recipe.deployment_type == DeploymentType.MULTIBOOT:
                 if not self._configure_multiboot_grub(partition_mounts):
                     return
             else:
@@ -439,8 +439,12 @@ class StorageBuilder(QThread):
                 
                 self._log_message("INFO", f"Formatting {partition_device} as {partition.filesystem.value}")
                 
+                # Skip formatting if filesystem is None (e.g., BIOS boot partition)
+            if partition.filesystem is not None:
                 if not self._format_partition(partition_device, partition):
                     return False
+            else:
+                self._log_message("INFO", f"Skipping format for {partition_device} (unformatted partition)")
             
             return True
             
@@ -1350,13 +1354,13 @@ For more information, visit: https://dortania.github.io/OpenCore-Legacy-Patcher/
             self.logger.info(message)
 
 
-class USBBuilderEngine:
+class StorageBuilderEngine:
     """Main USB Builder Engine - extends DiskManager functionality"""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.disk_manager = DiskManager()
-        self.builder = USBBuilder()
+        self.builder = StorageBuilder()
         self.recipes: Dict[str, DeploymentRecipe] = {}
         self.hardware_profiles: Dict[str, HardwareProfile] = {}
         
@@ -1560,7 +1564,7 @@ class USBBuilderEngine:
     
     def create_deployment_usb(self, recipe_name: str, target_device: str,
                             hardware_profile_name: str, source_files: Dict[str, str],
-                            progress_callback: Optional[Callable] = None) -> USBBuilder:
+                            progress_callback: Optional[Callable] = None) -> StorageBuilder:
         """Create deployment USB drive"""
         
         # Validate inputs
@@ -1584,7 +1588,7 @@ class USBBuilderEngine:
     
     def create_multiboot_usb(self, target_device: str, os_images: Dict[str, str],
                             hardware_profile_name: str = "generic_x64",
-                            progress_callback: Optional[Callable] = None) -> USBBuilder:
+                            progress_callback: Optional[Callable] = None) -> StorageBuilder:
         """Create multi-boot USB drive with multiple operating systems"""
         
         # Get the multi-boot recipe

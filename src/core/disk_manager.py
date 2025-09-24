@@ -320,6 +320,92 @@ class DiskManager:
         
         return drives
     
+    def get_all_storage_drives(self, include_system_drives: bool = False) -> List[DiskInfo]:
+        """Get list of ALL storage drives (removable and fixed) with safety classification"""
+        drives = []
+        seen_devices = set()  # Track base devices to avoid duplicates
+        
+        try:
+            # Get all disk partitions
+            partitions = psutil.disk_partitions()
+            
+            # Also get physical drives information (Linux/Windows specific)
+            physical_drives = self._get_physical_drives()
+            
+            for partition in partitions:
+                base_device = self._get_base_device(partition.device)
+                
+                # Skip if we've already processed this base device
+                if base_device in seen_devices:
+                    continue
+                seen_devices.add(base_device)
+                
+                try:
+                    usage = psutil.disk_usage(partition.mountpoint)
+                    is_removable = self._is_removable_drive(partition.device)
+                    is_system = self._is_system_drive(partition.device)
+                    
+                    # Skip system drives unless explicitly requested
+                    if is_system and not include_system_drives:
+                        continue
+                    
+                    # Get detailed device information
+                    model, vendor = self._get_device_info(partition.device)
+                    serial = self._get_device_serial(partition.device)
+                    health = self._check_device_health(partition.device)
+                    write_speed = self._measure_write_speed(partition.device)
+                    
+                    # Generate descriptive name with safety indicator
+                    device_type = self._classify_device_type(partition.device, is_removable, usage.total)
+                    safety_label = "⚠️ " if not is_removable and not is_system else ""
+                    name = f"{safety_label}{model or device_type}"
+                    
+                    drive_info = DiskInfo(
+                        path=base_device,  # Use base device path
+                        name=name,
+                        size_bytes=usage.total,
+                        filesystem=partition.fstype,
+                        mountpoint=partition.mountpoint if not is_system else None,
+                        is_removable=is_removable,
+                        model=model or device_type,
+                        vendor=vendor or "Unknown",
+                        serial=serial,
+                        health_status=health,
+                        write_speed_mbps=write_speed
+                    )
+                    
+                    drives.append(drive_info)
+                    
+                except (PermissionError, OSError) as e:
+                    self.logger.debug(f"Could not access drive {partition.device}: {e}")
+                    continue
+            
+            # Add any physical drives not found through partitions
+            for phys_drive in physical_drives:
+                if phys_drive["path"] not in seen_devices:
+                    safety_label = "⚠️ " if not phys_drive["is_removable"] else ""
+                    drive_info = DiskInfo(
+                        path=phys_drive["path"],
+                        name=f"{safety_label}{phys_drive['model']}",
+                        size_bytes=phys_drive["size"],
+                        filesystem="Unknown",
+                        mountpoint=None,
+                        is_removable=phys_drive["is_removable"],
+                        model=phys_drive["model"],
+                        vendor=phys_drive.get("vendor", "Unknown"),
+                        serial=phys_drive.get("serial"),
+                        health_status="Unknown",
+                        write_speed_mbps=25.0
+                    )
+                    drives.append(drive_info)
+                        
+        except Exception as e:
+            self.logger.error(f"Error getting all storage drives: {e}")
+        
+        # Sort drives: removable first, then by size
+        drives.sort(key=lambda d: (not d.is_removable, d.size_bytes))
+        return drives
+    
     def _is_removable_drive(self, device_path: str) -> bool:
         """Check if device is a removable drive"""
         try:
@@ -334,9 +420,12 @@ class DiskManager:
                         return f.read().strip() == '1'
                         
             elif system == "Windows":
-                import ctypes
-                drive_type = ctypes.windll.kernel32.GetDriveTypeW(device_path)
-                return drive_type == 2  # DRIVE_REMOVABLE
+                try:
+                    import ctypes
+                    drive_type = ctypes.windll.kernel32.GetDriveTypeW(device_path)
+                    return drive_type == 2  # DRIVE_REMOVABLE
+                except (AttributeError, OSError):
+                    return False
                 
             elif system == "Darwin":  # macOS
                 return "/Volumes/" in device_path
@@ -404,6 +493,132 @@ class DiskManager:
                 
         except Exception:
             return "Unknown"
+    
+    def _get_base_device(self, device_path: str) -> str:
+        """Get base device path (removes partition numbers)"""
+        import re
+        # Remove partition numbers: /dev/sda1 -> /dev/sda, /dev/nvme0n1p1 -> /dev/nvme0n1
+        if platform.system() == "Linux":
+            # Handle nvme drives (nvme0n1p1 -> nvme0n1) and regular drives (sda1 -> sda)
+            return re.sub(r'p?\d+$', '', device_path)
+        elif platform.system() == "Windows":
+            # Handle Windows drive paths
+            return device_path
+        else:  # macOS
+            return re.sub(r's\d+$', '', device_path)
+    
+    def _classify_device_type(self, device_path: str, is_removable: bool, size_bytes: int) -> str:
+        """Classify device type based on characteristics"""
+        size_gb = size_bytes / (1024 ** 3)
+        
+        if is_removable:
+            if size_gb < 64:
+                return "USB Flash Drive"
+            elif size_gb < 1024:
+                return "External Drive"
+            else:
+                return "External Hard Drive"
+        else:
+            if "nvme" in device_path.lower():
+                return "NVMe SSD"
+            elif size_gb < 512:
+                return "Internal SSD"
+            else:
+                return "Internal Hard Drive"
+    
+    def _is_system_drive(self, device_path: str) -> bool:
+        """Check if device contains the operating system"""
+        try:
+            system = platform.system()
+            
+            if system == "Linux":
+                # Check if device contains root filesystem
+                with open('/proc/mounts', 'r') as f:
+                    for line in f:
+                        mount_device, mount_point, *_ = line.split()
+                        if mount_point in ['/', '/boot', '/usr'] and device_path.startswith(mount_device.rstrip('0123456789')):
+                            return True
+                            
+            elif system == "Windows":
+                # Check if device contains C: drive
+                import ctypes
+                system_drive = os.environ.get('SystemDrive', 'C:')
+                if device_path.upper().startswith(system_drive):
+                    return True
+                    
+            elif system == "Darwin":  # macOS
+                # Check if device contains system volume
+                if "/System/Volumes" in str(device_path) or device_path == "/":
+                    return True
+                    
+            return False
+            
+        except Exception:
+            return False
+    
+    def _get_physical_drives(self) -> List[Dict]:
+        """Get physical drive information (platform specific)"""
+        drives = []
+        
+        try:
+            system = platform.system()
+            
+            if system == "Linux":
+                # Read from /proc/partitions or use lsblk
+                try:
+                    result = subprocess.run(['lsblk', '-J', '-o', 'NAME,SIZE,TYPE,REMOVABLE,MODEL'], 
+                                          capture_output=True, text=True, check=False)
+                    if result.returncode == 0:
+                        import json
+                        data = json.loads(result.stdout)
+                        for device in data.get('blockdevices', []):
+                            if device.get('type') == 'disk':
+                                drives.append({
+                                    'path': f"/dev/{device['name']}",
+                                    'model': device.get('model', 'Unknown'),
+                                    'size': self._parse_size(device.get('size', '0')),
+                                    'is_removable': device.get('removable', False)
+                                })
+                except:
+                    pass
+                    
+            elif system == "Windows":
+                # Use wmic to get physical drive info
+                try:
+                    result = subprocess.run(['wmic', 'diskdrive', 'get', 'size,model,deviceid', '/format:csv'], 
+                                          capture_output=True, text=True, check=False)
+                    if result.returncode == 0:
+                        lines = result.stdout.strip().split('\n')[1:]  # Skip header
+                        for line in lines:
+                            if line.strip():
+                                parts = line.split(',')
+                                if len(parts) >= 4:
+                                    drives.append({
+                                        'path': parts[1].strip(),
+                                        'model': parts[2].strip(),
+                                        'size': int(parts[3].strip() or 0),
+                                        'is_removable': False  # Would need additional check
+                                    })
+                except:
+                    pass
+                    
+        except Exception as e:
+            self.logger.debug(f"Error getting physical drives: {e}")
+        
+        return drives
+    
+    def _parse_size(self, size_str: str) -> int:
+        """Parse size string (e.g., '500G', '1T') to bytes"""
+        try:
+            import re
+            match = re.match(r'(\d+\.?\d*)([KMGT]?)', size_str.upper())
+            if match:
+                number, unit = match.groups()
+                multipliers = {'': 1, 'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4}
+                return int(float(number) * multipliers.get(unit, 1))
+            return 0
+        except:
+            return 0
     
     def _measure_write_speed(self, device_path: str) -> float:
         """Measure device write speed (basic estimation)"""

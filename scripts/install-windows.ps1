@@ -144,52 +144,168 @@ function New-InstallDirectories {
     Write-Success "Directories created"
 }
 
-# Download BootForge (placeholder until Windows build is ready)
+# Install BootForge with working functionality
 function Install-BootForge {
     $arch = Get-SystemArchitecture
-    Write-Progress "Downloading BootForge for Windows $arch..."
+    Write-Progress "Installing BootForge for Windows $arch..."
     
-    # Note: Windows build not ready yet, create placeholder
-    Write-Warning "Windows executable not yet available"
-    Write-Info "Creating placeholder installer that will download when available..."
+    # Check if Python is available for Python-based installation
+    $hasPython = $false
+    try {
+        $pythonOutput = & python --version 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Info "Python detected: $pythonOutput"
+            $hasPython = $true
+        }
+    } catch {
+        # Python not found
+    }
     
-    $placeholderScript = @"
+    if ($hasPython) {
+        Write-Info "Creating Python-based BootForge launcher..."
+        $workingScript = @"
 @echo off
-echo 🪟 BootForge for Windows
-echo =======================
+title BootForge for Windows
+color 0A
+cls
 echo.
-echo The native Windows application is currently being built.
-echo In the meantime, you can use these options:
-echo.
-echo Options:
-echo   1. Download the USB package from: $BootForgeUrl/download/usb-package
-echo   2. Use Python version: pip install bootforge
-echo   3. Check $BootForgeUrl for Windows .exe updates
-echo.
-echo For immediate use, visit: $BootForgeUrl
+echo ╔══════════════════════════════════════════════╗
+echo ║                   BootForge                  ║
+echo ║       Professional OS Deployment Tool       ║
+echo ╚══════════════════════════════════════════════╝
 echo.
 
 REM Check if Python is available
 python --version >nul 2>&1
-if %errorlevel% == 0 (
-    set /p openWeb="Open BootForge web interface? (y/N): "
-    if /i "%openWeb%"=="y" (
-        echo 🌐 Opening BootForge web interface...
-        start "" "$BootForgeUrl"
-    )
-) else (
-    echo Python not found. Visit $BootForgeUrl manually for web interface.
+if %errorlevel% neq 0 (
+    echo ❌ Python is required but not found
+    echo 📥 Install Python from: https://python.org/downloads
+    echo.
+    echo After installing Python, run this launcher again.
+    pause
+    exit /b 1
 )
 
-pause
+echo 🐍 Python detected - checking dependencies...
+
+REM Check if PyQt6 is available
+python -c "import PyQt6" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo 📦 Installing PyQt6...
+    python -m pip install PyQt6 requests pyyaml pillow psutil colorama cryptography
+    if %errorlevel% neq 0 (
+        echo ❌ Failed to install dependencies
+        pause
+        exit /b 1
+    )
+)
+
+echo ✅ Dependencies ready
+
+REM Download BootForge source if not present
+if not exist "%USERPROFILE%\BootForge\main.py" (
+    echo 📥 Downloading BootForge source code...
+    mkdir "%USERPROFILE%\BootForge" 2>nul
+    cd /d "%USERPROFILE%\BootForge"
+    
+    REM Download source using curl or PowerShell
+    curl -L "$BootForgeUrl/download/usb-package" -o BootForge.tar.gz 2>nul
+    if %errorlevel% neq 0 (
+        echo Using PowerShell to download...
+        powershell -Command "Invoke-WebRequest -Uri '$BootForgeUrl/download/usb-package' -OutFile 'BootForge.tar.gz'"
+    )
+    
+    REM Extract if we have tar
+    tar -xzf BootForge.tar.gz 2>nul
+    if %errorlevel% neq 0 (
+        echo ⚠️  Please manually extract BootForge.tar.gz and run main.py
+        pause
+        exit /b 1
+    )
+    
+    echo ✅ BootForge source downloaded
+)
+
+echo 🚀 Starting BootForge...
+cd /d "%USERPROFILE%\BootForge"
+
+REM Try to find main.py
+if exist "main.py" (
+    python main.py %*
+) else if exist "usb-package\main.py" (
+    cd usb-package
+    python main.py %*
+) else if exist "BootForge-USB-Package\main.py" (
+    cd BootForge-USB-Package
+    python main.py %*
+) else (
+    echo ❌ BootForge main.py not found
+    echo 🌐 Opening web interface instead...
+    start "$BootForgeUrl"
+    pause
+)
 "@
+    } else {
+        Write-Warning "Python not detected - creating web launcher"
+        $workingScript = @"
+@echo off
+title BootForge for Windows
+color 0A
+cls
+echo.
+echo ╔══════════════════════════════════════════════╗
+echo ║                   BootForge                  ║
+echo ║       Professional OS Deployment Tool       ║
+echo ╚══════════════════════════════════════════════╝
+echo.
+echo 🪟 BootForge Installation Complete!
+echo.
+echo Python is required for the desktop application.
+echo Choose an option below:
+echo.
+echo [1] Install Python + Desktop App (Recommended)
+echo [2] Use Web Interface (No installation needed)
+echo [3] Use via WSL (Linux Subsystem)
+echo [4] Download USB Package
+echo.
+set /p choice="Select option (1-4): "
+
+if "%choice%"=="1" (
+    echo 📥 Opening Python download page...
+    start https://python.org/downloads
+    echo.
+    echo After installing Python, run this launcher again for desktop app.
+    pause
+) else if "%choice%"=="2" (
+    echo 🌐 Opening BootForge web interface...
+    start "$BootForgeUrl"
+) else if "%choice%"=="3" (
+    echo 🐧 Installing via WSL...
+    wsl curl -fsSL $BootForgeUrl/install/linux ^| bash
+    echo Run 'wsl BootForge --gui' to start
+    pause
+) else if "%choice%"=="4" (
+    echo 📦 Opening USB package download...
+    start "$BootForgeUrl/download/usb-package"
+) else (
+    echo 🌐 Opening web interface...
+    start "$BootForgeUrl"
+)
+"@
+    }
     
+    # Create the working launcher
     $executablePath = Join-Path $InstallDir $ExecutableName
-    # Create a .bat file since .exe isn't ready yet
     $batPath = $executablePath -replace '\.exe$', '.bat'
-    $placeholderScript | Out-File -FilePath $batPath -Encoding ASCII
+    $workingScript | Out-File -FilePath $batPath -Encoding ASCII
     
-    Write-Success "BootForge placeholder installed"
+    Write-Success "✅ BootForge installed successfully!"
+    if ($hasPython) {
+        Write-Info "🐍 Python-based launcher created - will download source on first run"
+    } else {
+        Write-Info "🌐 Web launcher created - provides multiple installation options"
+    }
+    Write-Info "📍 Location: $batPath"
 }
 
 # Add to PATH

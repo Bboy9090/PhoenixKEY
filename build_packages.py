@@ -46,27 +46,35 @@ class PackageBuilder:
         """Build standalone executable using PyInstaller"""
         logger.info("Building standalone executable...")
         
-        # PyInstaller command
+        # Platform-specific separator for --add-data
+        separator = ";" if self.current_platform == "windows" else ":"
+        
+        # PyInstaller command - all options before the script name
         cmd = [
             sys.executable, "-m", "PyInstaller",
             "--name", self.app_name,
             "--onedir",  # Create a directory with all dependencies
             "--windowed",  # No console window (GUI app)
-            "--add-data", "src;src",  # Include source directory
-            "--add-data", "assets;assets",  # Include assets if they exist
+            f"--add-data", f"src{separator}src",  # Include source directory
             "--hidden-import", "PyQt6.QtCore",
             "--hidden-import", "PyQt6.QtWidgets", 
             "--hidden-import", "PyQt6.QtGui",
             "--hidden-import", "psutil",
             "--hidden-import", "requests",
             "--hidden-import", "cryptography",
-            "--collect-all", "PyQt6",
-            "--icon", "assets/icon.ico" if Path("assets/icon.ico").exists() else None,
-            "main.py"
+            "--collect-all", "PyQt6"
         ]
         
-        # Remove None values
-        cmd = [x for x in cmd if x is not None]
+        # Add icon if it exists (before script name)
+        if Path("assets/icon.ico").exists():
+            cmd.extend(["--icon", "assets/icon.ico"])
+            
+        # Add assets if they exist (before script name)
+        if Path("assets").exists():
+            cmd.extend(["--add-data", f"assets{separator}assets"])
+        
+        # Script name must be last
+        cmd.append("main.py")
         
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)

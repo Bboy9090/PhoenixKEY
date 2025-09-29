@@ -59,38 +59,42 @@ class StepIndicator(QWidget):
             5: "success"    # Summary
         }
         
-        # Colors using modern theme
+        # Enhanced colors using modern orange theme
         self.colors = {
             StepState.LOCKED: {
                 'circle': BootForgeTheme.COLORS['text_disabled'],
                 'text': BootForgeTheme.COLORS['text_disabled'],
-                'line': BootForgeTheme.COLORS['border']
+                'line': BootForgeTheme.COLORS['border'],
+                'glow': BootForgeTheme.COLORS['border']
             },
             StepState.ACTIVE: {
-                'circle': BootForgeTheme.COLORS['primary'],
+                'circle': BootForgeTheme.COLORS['primary'],  # Orange
                 'text': BootForgeTheme.COLORS['text_primary'],
-                'line': BootForgeTheme.COLORS['primary']
+                'line': BootForgeTheme.COLORS['primary'],
+                'glow': BootForgeTheme.COLORS['accent_3']  # Bright orange glow
             },
             StepState.COMPLETE: {
                 'circle': BootForgeTheme.COLORS['success'],
                 'text': BootForgeTheme.COLORS['text_primary'], 
-                'line': BootForgeTheme.COLORS['success']
+                'line': BootForgeTheme.COLORS['success'],
+                'glow': BootForgeTheme.COLORS['success']
             },
             StepState.ERROR: {
                 'circle': BootForgeTheme.COLORS['error'],
                 'text': BootForgeTheme.COLORS['text_primary'],
-                'line': BootForgeTheme.COLORS['error']
+                'line': BootForgeTheme.COLORS['error'],
+                'glow': BootForgeTheme.COLORS['error']
             }
         }
         
         self.setFixedSize(self.LINE_LENGTH + self.CIRCLE_SIZE if not is_last else self.CIRCLE_SIZE, 100)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         
-        # Enhanced shadow effect
+        # Enhanced shadow effect with orange glow for active states
         shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(12)
-        shadow.setColor(QColor(0, 0, 0, 80))
-        shadow.setOffset(0, 3)
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 100))
+        shadow.setOffset(0, 4)
         self.setGraphicsEffect(shadow)
         
         # Animation properties for smooth transitions
@@ -199,15 +203,23 @@ class StepIndicator(QWidget):
         # Apply opacity for animations
         painter.setOpacity(self._opacity)
         
-        # Enhanced hover effect for clickable steps
+        # Enhanced hover effect for clickable steps with orange glow
         if self.is_clickable() and self.underMouse():
-            # Draw glow effect
-            glow_rect = QRect(circle_x - 4, circle_y - 4, self.CIRCLE_SIZE + 8, self.CIRCLE_SIZE + 8)
-            glow_color = QColor(circle_color)
-            glow_color.setAlpha(60)
+            # Draw multiple glow layers for enhanced effect
+            glow_color = QColor(self.colors[self.state]['glow'])
+            
+            # Outer glow
+            outer_glow_rect = QRect(circle_x - 8, circle_y - 8, scaled_size + 16, scaled_size + 16)
+            glow_color.setAlpha(30)
             painter.setBrush(QBrush(glow_color))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(glow_rect)
+            painter.drawEllipse(outer_glow_rect)
+            
+            # Inner glow
+            inner_glow_rect = QRect(circle_x - 4, circle_y - 4, scaled_size + 8, scaled_size + 8)
+            glow_color.setAlpha(60)
+            painter.setBrush(QBrush(glow_color))
+            painter.drawEllipse(inner_glow_rect)
         
         # Main circle with gradient effect
         painter.setBrush(QBrush(circle_color))

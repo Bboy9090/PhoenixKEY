@@ -1,0 +1,89 @@
+PS D:\BootForgeOS> python build_system\simple_build.py
+Building BootForge executable...
+480 INFO: PyInstaller: 6.16.0, contrib hooks: 2025.8
+480 INFO: Python: 3.11.1
+491 INFO: Platform: Windows-10-10.0.22631-SP0
+491 INFO: Python environment: C:\Users\Bobby\AppData\Local\Programs\Python\Python311
+494 INFO: wrote D:\BootForgeOS\BootForge.spec
+507 INFO: Module search paths (PYTHONPATH):
+['D:\\BootForgeOS',
+ 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\python311.zip',
+ 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib',
+ 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\DLLs',
+ 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311',
+ 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages',
+ 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\setuptools\\_vendor',
+ 'D:\\BootForgeOS']
+1074 INFO: Appending 'datas' from .spec
+1082 INFO: checking Analysis
+1130 INFO: Building because hiddenimports changed
+1130 INFO: Looking for Python shared library...
+1130 INFO: Using Python shared library: C:\Users\Bobby\AppData\Local\Programs\Python\Python311\python311.dll
+1130 INFO: Running Analysis Analysis-00.toc
+1130 INFO: Target bytecode optimization level: 0
+1130 INFO: Initializing module dependency graph...
+1131 INFO: Initializing module graph hook caches...
+1153 INFO: Analyzing modules for base_library.zip ...
+3015 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+3110 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+4901 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+6508 INFO: Caching module dependency graph...
+6560 INFO: Analyzing D:\BootForgeOS\main.py
+6719 INFO: Processing standard module hook 'hook-PyQt6.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+7515 INFO: Processing standard module hook 'hook-PyQt6.QtWidgets.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+8332 INFO: Processing standard module hook 'hook-PyQt6.QtCore.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+9223 INFO: Processing standard module hook 'hook-PyQt6.QtGui.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+9741 INFO: Processing standard module hook 'hook-psutil.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+9829 INFO: Processing standard module hook 'hook-_ctypes.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+9891 INFO: Processing standard module hook 'hook-platform.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+10437 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+10439 INFO: SetuptoolsInfo: initializing cached setuptools info...
+15521 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+15682 INFO: Processing standard module hook 'hook-xml.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+16534 INFO: Processing standard module hook 'hook-difflib.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+17491 INFO: Processing standard module hook 'hook-PyQt6.QtSvg.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+17805 INFO: Processing standard module hook 'hook-sqlite3.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+18350 INFO: Processing standard module hook 'hook-urllib3.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+19515 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+19701 INFO: Processing standard module hook 'hook-cryptography.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+21220 INFO: hook-cryptography: cryptography does not seem to be using dynamically linked OpenSSL.
+21626 INFO: Processing standard module hook 'hook-bcrypt.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+21671 INFO: Processing standard module hook 'hook-certifi.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+22103 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+22769 INFO: Processing module hooks (post-graph stage)...
+22827 INFO: Performing binary vs. data reclassification (229 entries)
+23403 INFO: Looking for ctypes DLLs
+23484 INFO: Analyzing run-time hooks ...
+23487 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+23490 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+23492 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+23496 INFO: Including run-time hook 'pyi_rth_cryptography_openssl.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\rthooks'
+23497 INFO: Including run-time hook 'pyi_rth_pyqt6.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+23499 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+23502 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyInstaller\\hooks'
+23584 INFO: Creating base_library.zip...
+23665 INFO: Looking for dynamic libraries
+24231 INFO: Extra DLL search directories (AddDllDirectory): ['C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyQt6\\Qt6\\bin']
+24231 INFO: Extra DLL search directories (PATH): ['C:\\Users\\Bobby\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\PyQt6\\Qt6\\bin']
+25396 INFO: Warnings written to D:\BootForgeOS\build\BootForge\warn-BootForge.txt
+25455 INFO: Graph cross-reference written to D:\BootForgeOS\build\BootForge\xref-BootForge.html
+25551 INFO: checking PYZ
+25609 INFO: checking PKG
+25626 INFO: Building because toc changed
+25627 INFO: Building PKG (CArchive) BootForge.pkg
+48565 INFO: Building PKG (CArchive) BootForge.pkg completed successfully.
+48578 INFO: Bootloader C:\Users\Bobby\AppData\Local\Programs\Python\Python311\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+48578 INFO: checking EXE
+48614 INFO: Building because console changed
+48614 INFO: Building EXE from EXE-00.toc
+48616 INFO: Copying bootloader EXE to D:\BootForgeOS\dist\BootForge.exe
+48712 INFO: Copying icon to EXE
+48770 INFO: Copying 0 resources to EXE
+48770 INFO: Embedding manifest in EXE
+48825 INFO: Appending PKG archive to EXE
+49609 INFO: Fixing EXE headers
+51541 INFO: Building EXE from EXE-00.toc completed successfully.
+51559 INFO: Build complete! The results are available in: D:\BootForgeOS\dist
+✅ Build successful!
+Executable: D:\BootForgeOS/dist/BootForge
+PS D:\BootForgeOS>

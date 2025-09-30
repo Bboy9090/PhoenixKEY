@@ -51,6 +51,7 @@ class BootForgeTheme:
         "info": "#40c4ff",              # Bright blue info
         
         # Accent colors - Orange, Red-Orange, Purple palette
+        "accent": "#ff8500",            # Default accent color (bright orange)
         "accent_1": "#9d4edd",          # Purple accent (touches)
         "accent_2": "#ff4500",          # Red-orange accent
         "accent_3": "#ff8500",          # Bright orange accent

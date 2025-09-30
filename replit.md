@@ -6,6 +6,13 @@ BootForge is a professional-grade tool for creating bootable USB drives for macO
 
 ## Recent Changes
 
+**September 30, 2025 - Manual Hardware Profile Selection (v1.1):**
+- ✅ Added "Manual Selection" feature to Hardware Detection step
+- ✅ Users can now select hardware profiles for OTHER computers (not just current one)
+- ✅ Organized profiles by platform (Mac, Windows, Linux) in searchable tabbed dialog
+- ✅ Enables creating bootable USBs for multiple computers from one workstation
+- ✅ Perfect for users with multiple devices (iMacs, laptops, etc.)
+
 **September 12, 2025 - USB Builder Engine Complete (v1.0):**
 - ✅ Implemented complete OpenCore Legacy Patcher-style USB deployment system
 - ✅ Added 4 deployment recipes: macOS OCLP, Windows unattended, Linux automated, Custom payload

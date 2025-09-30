@@ -377,7 +377,7 @@ class HardwareDetectionStepView(StepView):
         
         # Auto-detect button (primary action)
         self.detect_button = QPushButton("🔍 Auto-Detect Hardware")
-        self.detect_button.setMinimumSize(250, 50)
+        self.detect_button.setMinimumSize(220, 50)
         self.detect_button.setStyleSheet("""
             QPushButton {
                 background-color: #0078d4;
@@ -401,6 +401,34 @@ class HardwareDetectionStepView(StepView):
         """)
         self.detect_button.clicked.connect(self._start_detection)
         button_layout.addWidget(self.detect_button)
+        
+        # Manual Selection button (for selecting other computers)
+        self.manual_button = QPushButton("🧭 Manual Selection")
+        self.manual_button.setMinimumSize(220, 50)
+        self.manual_button.setStyleSheet("""
+            QPushButton {
+                background-color: #ff6b35;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 12px 24px;
+            }
+            QPushButton:hover {
+                background-color: #ff5722;
+            }
+            QPushButton:pressed {
+                background-color: #e64a19;
+            }
+            QPushButton:disabled {
+                background-color: #4a4a4a;
+                color: #888888;
+            }
+        """)
+        self.manual_button.clicked.connect(self._open_manual_selection)
+        self.manual_button.setToolTip("Choose hardware profile for a different computer")
+        button_layout.addWidget(self.manual_button)
         
         # Cancel button (hidden initially)
         self.cancel_button = QPushButton("Cancel Detection")
@@ -572,6 +600,210 @@ class HardwareDetectionStepView(StepView):
             self.logger.info("Cancelling hardware detection...")
             self.detection_worker.cancel_detection()
             self.status_label.setText("⏹️ Cancelling detection...")
+    
+    def _open_manual_selection(self):
+        """Open manual hardware profile selection dialog"""
+        from src.core.hardware_profiles import get_profiles_by_platform
+        
+        # Create dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Manual Hardware Profile Selection")
+        dialog.setMinimumSize(800, 600)
+        dialog.setStyleSheet(f"background-color: {BootForgeTheme.COLORS['bg_primary']};")
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Instructions
+        info_label = QLabel("💡 Select the hardware profile for the computer you want to create a bootable USB for.\nThis allows you to create USBs for different computers than the one you're currently using.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet(f"color: {BootForgeTheme.COLORS['text_secondary']}; padding: 10px; font-size: 14px;")
+        layout.addWidget(info_label)
+        
+        # Search box
+        search_layout = QHBoxLayout()
+        search_label = QLabel("🔍 Search:")
+        search_label.setStyleSheet(f"color: {BootForgeTheme.COLORS['text_primary']}; font-weight: bold;")
+        search_layout.addWidget(search_label)
+        
+        search_box = QLineEdit()
+        search_box.setPlaceholderText("Type to filter by name or model...")
+        search_box.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {BootForgeTheme.COLORS['bg_secondary']};
+                color: {BootForgeTheme.COLORS['text_primary']};
+                border: 2px solid {BootForgeTheme.COLORS['border']};
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 14px;
+            }}
+        """)
+        search_layout.addWidget(search_box)
+        layout.addLayout(search_layout)
+        
+        # Tabs for platforms
+        tabs = QTabWidget()
+        tabs.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: 2px solid {BootForgeTheme.COLORS['border']};
+                background-color: {BootForgeTheme.COLORS['bg_secondary']};
+                border-radius: 6px;
+            }}
+            QTabBar::tab {{
+                background-color: {BootForgeTheme.COLORS['bg_tertiary']};
+                color: {BootForgeTheme.COLORS['text_primary']};
+                padding: 10px 20px;
+                margin-right: 2px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {BootForgeTheme.COLORS['accent']};
+                color: white;
+                font-weight: bold;
+            }}
+        """)
+        
+        # Store profile widgets for searching
+        self.profile_widgets = {}
+        self.selected_manual_profile = None
+        
+        # Create tables for each platform
+        for platform_name, platform_key in [("🍎 Mac Models", "macos"), ("🪟 Windows PCs", "windows"), ("🐧 Linux Systems", "linux")]:
+            profiles = get_profiles_by_platform(platform_key)
+            
+            table = QTableWidget()
+            table.setColumnCount(4)
+            table.setHorizontalHeaderLabels(["Name", "Model", "Architecture", "Year"])
+            table.setRowCount(len(profiles))
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+            table.setStyleSheet(f"""
+                QTableWidget {{
+                    background-color: {BootForgeTheme.COLORS['bg_secondary']};
+                    color: {BootForgeTheme.COLORS['text_primary']};
+                    gridline-color: {BootForgeTheme.COLORS['border']};
+                    border: none;
+                }}
+                QHeaderView::section {{
+                    background-color: {BootForgeTheme.COLORS['bg_tertiary']};
+                    color: {BootForgeTheme.COLORS['text_primary']};
+                    padding: 8px;
+                    border: none;
+                    font-weight: bold;
+                }}
+                QTableWidget::item:selected {{
+                    background-color: {BootForgeTheme.COLORS['accent']};
+                    color: white;
+                }}
+            """)
+            
+            # Populate table
+            for row, profile in enumerate(profiles):
+                name_item = QTableWidgetItem(profile.name)
+                model_item = QTableWidgetItem(profile.model)
+                arch_item = QTableWidgetItem(profile.architecture)
+                year_item = QTableWidgetItem(str(getattr(profile, 'year', 'N/A')))
+                
+                table.setItem(row, 0, name_item)
+                table.setItem(row, 1, model_item)
+                table.setItem(row, 2, arch_item)
+                table.setItem(row, 3, year_item)
+                
+                # Store profile data
+                name_item.setData(Qt.ItemDataRole.UserRole, profile)
+                
+                # Store for search
+                self.profile_widgets[f"{profile.name} {profile.model}".lower()] = (table, row)
+            
+            # Handle selection
+            def make_selection_handler(tbl):
+                def handler():
+                    selected = tbl.selectedItems()
+                    if selected:
+                        self.selected_manual_profile = selected[0].data(Qt.ItemDataRole.UserRole)
+                return handler
+            
+            table.itemSelectionChanged.connect(make_selection_handler(table))
+            table.horizontalHeader().setStretchLastSection(True)
+            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            
+            tabs.addTab(table, platform_name)
+        
+        # Search functionality
+        def filter_profiles(text):
+            text = text.lower()
+            for search_key, (table, row) in self.profile_widgets.items():
+                if text in search_key:
+                    table.showRow(row)
+                else:
+                    table.hideRow(row)
+        
+        search_box.textChanged.connect(filter_profiles)
+        
+        layout.addWidget(tabs)
+        
+        # Buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BootForgeTheme.COLORS['accent']};
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-weight: bold;
+                min-width: 100px;
+            }}
+            QPushButton:hover {{
+                background-color: {BootForgeTheme.COLORS['accent_hover']};
+            }}
+        """)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        
+        # Show dialog
+        if dialog.exec() == QDialog.DialogCode.Accepted and self.selected_manual_profile:
+            self.logger.info(f"Manual profile selected: {self.selected_manual_profile.name}")
+            
+            # Wrap profile in a ProfileMatch object
+            from src.core.hardware_detector import ProfileMatch
+            manual_match = ProfileMatch(
+                profile=self.selected_manual_profile,
+                match_score=0.0,
+                match_reasons=["Manual selection - user chose this profile for a different computer"],
+                confidence=DetectionConfidence.UNKNOWN,
+                detection_data=None
+            )
+            
+            # Set as selected profile
+            self.selected_profile = manual_match
+            self.profile_matches = [manual_match]
+            
+            # Update UI
+            self.status_label.setText(f"✅ Manually selected: {self.selected_manual_profile.name}")
+            self.status_label.setStyleSheet(f"color: {BootForgeTheme.COLORS['accent']}; font-size: 16px; font-weight: bold; padding: 10px;")
+            
+            # Show results
+            self.results_group.setVisible(True)
+            self.hardware_summary_label.setText(f"📱 {self.selected_manual_profile.name} (Manual Selection)")
+            self.hardware_details.setPlainText(f"""Platform: {self.selected_manual_profile.platform.title()}
+Model: {self.selected_manual_profile.model}
+Architecture: {self.selected_manual_profile.architecture}
+CPU: {self.selected_manual_profile.cpu_family}
+
+⚠️ NOTE: You manually selected this profile. Make sure you're creating the USB for the correct computer!
+            """)
+            
+            # Populate profile dropdown with manual selection
+            self.profile_combo.clear()
+            self.profile_combo.addItem(f"🧭 {self.selected_manual_profile.name} (Manual)")
+            self.profile_combo.setItemData(0, manual_match)
+            self.profile_combo.setEnabled(False)
+            
+            # Enable next button
+            self.set_navigation_enabled(next=True)
+            self.step_completed.emit()
     
     def _on_detection_started(self):
         """Handle detection started signal"""

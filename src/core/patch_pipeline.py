@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, asdict
 
 from src.core.hardware_detector import DetectedHardware, DetectionConfidence
 from src.core.models import HardwareProfile
-from src.core.safety_validator import SafetyValidator, ValidationResult, SafetyLevel, SafetyCheck
+from src.core.safety_validator import SafetyValidator, ValidationResult, SafetyLevel, SafetyCheck, PatchValidationMode
 
 
 class PatchType(Enum):

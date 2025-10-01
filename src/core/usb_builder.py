@@ -457,6 +457,11 @@ class StorageBuilder(QThread):
             system = platform.system()
             fs = partition.filesystem
             
+            # Check if filesystem is None
+            if fs is None:
+                self._log_message("ERROR", "Partition filesystem is None")
+                return False
+            
             if system == "Linux":
                 if fs == FileSystem.FAT32:
                     cmd = ['sudo', 'mkfs.fat', '-F', '32', '-n', partition.label, device]
@@ -1464,13 +1469,18 @@ class StorageBuilderEngine:
             )
             
             if patch_plan:
-                self.logger.info(f"Created patch plan with {len(patch_plan.actions)} actions for {hardware_profile.name}")
+                # Count total actions across all patch sets
+                all_actions = []
+                for patch_set in patch_plan.patch_sets:
+                    all_actions.extend(patch_set.actions)
+                
+                self.logger.info(f"Created patch plan with {len(all_actions)} actions for {hardware_profile.name}")
                 
                 # Log patch plan summary
-                for action in patch_plan.actions[:5]:  # Log first 5 actions
+                for action in all_actions[:5]:  # Log first 5 actions
                     self.logger.debug(f"  - {action.name} ({action.patch_type.value})")
-                if len(patch_plan.actions) > 5:
-                    self.logger.debug(f"  ... and {len(patch_plan.actions) - 5} more actions")
+                if len(all_actions) > 5:
+                    self.logger.debug(f"  ... and {len(all_actions) - 5} more actions")
             
             return patch_plan
             
@@ -1482,21 +1492,21 @@ class StorageBuilderEngine:
                           validation_mode: str = "compliant") -> ValidationResult:
         """Validate a patch plan using the safety validator"""
         try:
-            # Use existing safety validator methods
-            return self.safety_validator.validate_device(
-                device_path="/dev/null",  # Placeholder
-                safety_level=SafetyLevel.MODERATE
-            )
+            # Validate patch plan risk level
+            if patch_plan.overall_risk == ValidationResult.BLOCKED:
+                return ValidationResult.BLOCKED
+            elif patch_plan.overall_risk == ValidationResult.DANGEROUS:
+                return ValidationResult.DANGEROUS
+            elif patch_plan.overall_risk == ValidationResult.WARNING:
+                return ValidationResult.WARNING
+            else:
+                return ValidationResult.SAFE
         except Exception as e:
             self.logger.error(f"Failed to validate patch plan: {e}")
-            return ValidationResult(
-                is_valid=False,
-                risk_level=SafetyLevel.DANGEROUS,
-                messages=[f"Validation failed: {e}"]
-            )
+            return ValidationResult.DANGEROUS
     
     def get_compatible_patch_sets(self, hardware_profile: HardwareProfile,
-                                 target_os: str = None) -> List[PatchSet]:
+                                 target_os: Optional[str] = None) -> List[PatchSet]:
         """Get patch sets compatible with specific hardware"""
         compatible_sets = []
         

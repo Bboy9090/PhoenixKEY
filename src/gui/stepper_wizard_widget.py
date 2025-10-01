@@ -603,7 +603,14 @@ class HardwareDetectionStepView(StepView):
     
     def _open_manual_selection(self):
         """Open manual hardware profile selection dialog"""
-        from src.core.hardware_profiles import get_profiles_by_platform
+        self.logger.info("Manual Selection button clicked!")
+        
+        try:
+            from src.core.hardware_profiles import get_profiles_by_platform
+            self.logger.info("Successfully imported get_profiles_by_platform")
+        except Exception as e:
+            self.logger.error(f"Failed to import get_profiles_by_platform: {e}")
+            return
         
         # Create dialog
         dialog = QDialog(self)

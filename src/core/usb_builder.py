@@ -613,16 +613,44 @@ class StorageBuilder(QThread):
                 self._log_message("ERROR", "No recipe available")
                 return False
                 
-            device_base = self.target_device.rstrip('0123456789')
+            # Determine partition naming scheme based on platform
+            system = platform.system()
+            
+            # On Windows, partitions are already formatted by diskpart during creation
+            if system == "Windows":
+                self._log_message("INFO", "Windows partitions already formatted by diskpart, skipping")
+                return True
             
             for i, partition in enumerate(self.recipe.partitions, 1):
-                partition_device = f"{device_base}{i}"
-                
-                if not os.path.exists(partition_device):
-                    # Try alternative naming scheme
+                # Build partition device path based on platform conventions
+                if system == "Darwin":  # macOS uses disk2s1, disk2s2, etc.
+                    partition_device = f"{self.target_device}s{i}"
+                elif "nvme" in self.target_device or "mmcblk" in self.target_device:
+                    # NVMe and MMC devices use p1, p2, etc. (e.g., /dev/nvme0n1p1)
                     partition_device = f"{self.target_device}p{i}"
-                    if not os.path.exists(partition_device):
-                        self._log_message("ERROR", f"Partition device not found: {partition_device}")
+                else:
+                    # Standard naming: /dev/sda1, /dev/sdb2, etc.
+                    device_base = self.target_device.rstrip('0123456789')
+                    partition_device = f"{device_base}{i}"
+                
+                # Verify partition device exists
+                if not os.path.exists(partition_device):
+                    # Try alternative naming schemes
+                    alternatives = [
+                        f"{self.target_device}p{i}",  # NVMe style
+                        f"{self.target_device}s{i}",  # macOS style
+                        f"{self.target_device.rstrip('0123456789')}{i}"  # Standard style
+                    ]
+                    
+                    found = False
+                    for alt in alternatives:
+                        if os.path.exists(alt):
+                            partition_device = alt
+                            found = True
+                            break
+                    
+                    if not found:
+                        self._log_message("ERROR", f"Partition device not found: tried {partition_device} and alternatives")
                         return False
                 
                 # Skip formatting if filesystem is None (e.g., BIOS boot partition)
@@ -697,6 +725,16 @@ class StorageBuilder(QThread):
                     self._log_message("ERROR", f"macOS format failed: {result.stderr}")
                     return False
             
+            elif system == "Windows":
+                # Windows formatting - partitions should already be formatted by diskpart
+                # This is a no-op since Windows diskpart handles formatting during creation
+                self._log_message("INFO", f"Windows partition {device} already formatted by diskpart")
+                return True
+            
+            else:
+                self._log_message("ERROR", f"Unsupported platform for formatting: {system}")
+                return False
+            
             self._log_message("INFO", f"Successfully formatted {device} as {fs.value}")
             return True
             
@@ -713,13 +751,44 @@ class StorageBuilder(QThread):
                 self._log_message("ERROR", "No recipe available")
                 return {}
                 
-            device_base = self.target_device.rstrip('0123456789')
+            # Determine partition naming scheme based on platform
+            system = platform.system()
+            
+            # On Windows, query for assigned drive letters
+            if system == "Windows":
+                return self._mount_partitions_windows()
             
             for i, partition in enumerate(self.recipe.partitions, 1):
-                partition_device = f"{device_base}{i}"
-                
-                if not os.path.exists(partition_device):
+                # Build partition device path based on platform conventions
+                if system == "Darwin":  # macOS uses disk2s1, disk2s2, etc.
+                    partition_device = f"{self.target_device}s{i}"
+                elif "nvme" in self.target_device or "mmcblk" in self.target_device:
+                    # NVMe and MMC devices use p1, p2, etc.
                     partition_device = f"{self.target_device}p{i}"
+                else:
+                    # Standard naming: /dev/sda1, /dev/sdb2, etc.
+                    device_base = self.target_device.rstrip('0123456789')
+                    partition_device = f"{device_base}{i}"
+                
+                # Verify partition device exists
+                if not os.path.exists(partition_device):
+                    # Try alternative naming schemes
+                    alternatives = [
+                        f"{self.target_device}p{i}",  # NVMe style
+                        f"{self.target_device}s{i}",  # macOS style
+                        f"{self.target_device.rstrip('0123456789')}{i}"  # Standard style
+                    ]
+                    
+                    found = False
+                    for alt in alternatives:
+                        if os.path.exists(alt):
+                            partition_device = alt
+                            found = True
+                            break
+                    
+                    if not found:
+                        self._log_message("WARNING", f"Partition device not found: {partition_device}, skipping mount")
+                        continue
                 
                 # Create mount point
                 if not self.temp_dir:
@@ -755,6 +824,141 @@ class StorageBuilder(QThread):
             
         except Exception as e:
             self._log_message("ERROR", f"Error mounting partitions: {e}")
+            return {}
+    
+    def _mount_partitions_windows(self) -> Dict[str, str]:
+        """Mount Windows partitions by querying for assigned drive letters using PowerShell"""
+        mount_points = {}
+        
+        try:
+            if not self.recipe:
+                self._log_message("ERROR", "No recipe available")
+                return {}
+            
+            # Extract disk number from target device
+            if "PhysicalDrive" in self.target_device:
+                disk_num = self.target_device.split("PhysicalDrive")[-1]
+            else:
+                import re
+                match = re.search(r'(\d+)$', self.target_device)
+                if match:
+                    disk_num = match.group(1)
+                else:
+                    self._log_message("ERROR", "Cannot determine disk number")
+                    return {}
+            
+            self._log_message("INFO", f"Querying partitions for disk {disk_num}")
+            
+            # Wait for Windows to assign drive letters (up to 10 seconds)
+            max_retries = 10
+            retry_delay = 1
+            
+            for attempt in range(max_retries):
+                # Use PowerShell Get-Partition to query partitions by disk number and partition number
+                # This ensures correct order matching recipe partitions
+                ps_command = f"Get-Partition -DiskNumber {disk_num} | Select-Object PartitionNumber, DriveLetter, Size | ConvertTo-Json"
+                
+                result = subprocess.run(
+                    ['powershell', '-Command', ps_command],
+                    capture_output=True, text=True
+                )
+                
+                if result.returncode != 0:
+                    self._log_message("WARNING", f"PowerShell query failed (attempt {attempt + 1}/{max_retries}): {result.stderr}")
+                    time.sleep(retry_delay)
+                    continue
+                
+                try:
+                    import json
+                    partitions_data = json.loads(result.stdout)
+                    
+                    # Handle single partition (PowerShell returns dict instead of list)
+                    if isinstance(partitions_data, dict):
+                        partitions_data = [partitions_data]
+                    
+                    # Sort by partition number to match recipe order
+                    partitions_data = sorted(partitions_data, key=lambda x: x.get('PartitionNumber', 0))
+                    
+                    # Map partitions to recipe entries by index
+                    partition_count = 0
+                    for i, partition in enumerate(self.recipe.partitions, 1):
+                        if i - 1 < len(partitions_data):
+                            partition_info = partitions_data[i - 1]
+                            drive_letter = partition_info.get('DriveLetter')
+                            
+                            if drive_letter and drive_letter.strip():
+                                drive_path = f"{drive_letter}:\\"
+                                
+                                if os.path.exists(drive_path):
+                                    mount_points[partition.name] = drive_path
+                                    self._log_message("INFO", f"Mounted {partition.name} (partition {i}) at {drive_path}")
+                                    partition_count += 1
+                                else:
+                                    self._log_message("WARNING", f"Drive {drive_path} not accessible for partition {i}")
+                            else:
+                                self._log_message("WARNING", f"No drive letter for partition {i} (partition may not have a volume)")
+                        else:
+                            self._log_message("WARNING", f"Partition {i} not found in query results")
+                    
+                    # If we got at least some partitions mounted, consider it a success
+                    if partition_count > 0:
+                        self._log_message("INFO", f"Successfully mounted {partition_count} out of {len(self.recipe.partitions)} partitions")
+                        return mount_points
+                    else:
+                        self._log_message("WARNING", f"No partitions mounted yet (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        continue
+                    
+                except json.JSONDecodeError as e:
+                    self._log_message("WARNING", f"Failed to parse PowerShell output (attempt {attempt + 1}/{max_retries}): {e}")
+                    self._log_message("DEBUG", f"PowerShell output: {result.stdout}")
+                    time.sleep(retry_delay)
+                    continue
+            
+            # If we exhausted retries, log diagnostic info
+            self._log_message("ERROR", f"Failed to mount Windows partitions after {max_retries} attempts")
+            self._log_message("INFO", "Partitions may need drive letters to be manually assigned")
+            
+            return mount_points
+            
+        except Exception as e:
+            self._log_message("ERROR", f"Error mounting Windows partitions: {e}")
+            import traceback
+            self._log_message("DEBUG", f"Traceback: {traceback.format_exc()}")
+            return {}
+    
+    def _mount_partitions_windows_fallback(self) -> Dict[str, str]:
+        """Fallback method to find Windows drive letters"""
+        mount_points = {}
+        
+        try:
+            if not self.recipe:
+                return {}
+            
+            # Get all available drives
+            import string
+            available_drives = []
+            
+            for letter in string.ascii_uppercase:
+                drive_path = f"{letter}:\\"
+                if os.path.exists(drive_path):
+                    available_drives.append(drive_path)
+            
+            self._log_message("INFO", f"Found {len(available_drives)} available drives")
+            
+            # Assign the last N drives to partitions (most recently added)
+            num_partitions = len(self.recipe.partitions)
+            recent_drives = available_drives[-num_partitions:] if len(available_drives) >= num_partitions else available_drives
+            
+            for i, partition in enumerate(self.recipe.partitions):
+                if i < len(recent_drives):
+                    mount_points[partition.name] = recent_drives[i]
+                    self._log_message("INFO", f"Assigned {partition.name} to {recent_drives[i]}")
+            
+            return mount_points
+            
+        except Exception as e:
+            self._log_message("ERROR", f"Error in Windows fallback mount: {e}")
             return {}
     
     def _deploy_files(self, mount_points: Dict[str, str]) -> bool:

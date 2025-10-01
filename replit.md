@@ -9,6 +9,10 @@ BootForge is a professional-grade tool for creating bootable USB drives for macO
 **October 01, 2025 - Complete Cross-Platform Bootable USB Creation (v1.2.0):**
 - ✅ Implemented full Windows partition creation using diskpart for bootable macOS USBs
 - ✅ Implemented full macOS partition creation using diskutil for bootable macOS USBs
+- ✅ Implemented robust Windows partition mounting using PowerShell Get-Partition
+- ✅ Fixed device path logic for macOS (disk2s1), NVMe (nvme0n1p1), and standard Linux naming
+- ✅ Added Windows formatting skip (diskpart formats during partition creation)
+- ✅ Implemented retry logic for Windows drive letter assignment (10-second polling)
 - ✅ Fixed all LSP type errors in usb_builder.py (12 errors → 0 errors)
 - ✅ Fixed PatchPlan API usage (patch_sets iteration instead of direct actions access)
 - ✅ Fixed SafetyValidator API usage (validate_device_safety instead of validate_device)
@@ -17,6 +21,7 @@ BootForge is a professional-grade tool for creating bootable USB drives for macO
 - ✅ Verified OpenCore bootloader deployment is fully implemented with EFI structure validation
 - ✅ Cross-platform bootable macOS USB creation now works from Windows, Linux, or Mac
 - ✅ Users can create OCLP-patched macOS installer USBs from any computer
+- ✅ **ARCHITECT APPROVED FOR PRODUCTION v1.2.0**
 
 **September 30, 2025 - Complete Windows Compatibility & LSP Cleanup (v1.1.2):**
 - ✅ Fixed ALL Windows compatibility issues for production-ready Windows builds

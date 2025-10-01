@@ -203,16 +203,14 @@ class BootForgeMainWindow(QMainWindow):
         refresh_devices.triggered.connect(self._refresh_devices)
         tools_menu.addAction(refresh_devices)
         
-        # DISABLED - Format Device is a placeholder (use USB Builder wizard instead)
-        # format_device = QAction("&Format Device", self)
-        # format_device.triggered.connect(self._format_device)
-        # tools_menu.addAction(format_device)
+        format_device = QAction("&Format Device", self)
+        format_device.triggered.connect(self._format_device)
+        tools_menu.addAction(format_device)
         
-        # DISABLED - Preferences dialog not yet implemented  
-        # tools_menu.addSeparator()
-        # preferences = QAction("&Preferences", self)
-        # preferences.triggered.connect(self._show_preferences)
-        # tools_menu.addAction(preferences)
+        tools_menu.addSeparator()
+        preferences = QAction("&Preferences", self)
+        preferences.triggered.connect(self._show_preferences)
+        tools_menu.addAction(preferences)
         
         # Help menu
         help_menu = menubar.addMenu("&Help")
@@ -255,13 +253,12 @@ class BootForgeMainWindow(QMainWindow):
         stop_action.triggered.connect(self._stop_operation)
         toolbar.addAction(stop_action)
         
-        # DISABLED - Settings action (Preferences dialog not yet implemented)
-        # toolbar.addSeparator()
-        # settings_action = QAction("Settings", self)
-        # settings_action.setIcon(self._create_icon("settings"))
-        # settings_action.setToolTip("Application settings")
-        # settings_action.triggered.connect(self._show_preferences)
-        # toolbar.addAction(settings_action)
+        toolbar.addSeparator()
+        settings_action = QAction("Settings", self)
+        settings_action.setIcon(self._create_icon("settings"))
+        settings_action.setToolTip("Application settings")
+        settings_action.triggered.connect(self._show_preferences)
+        toolbar.addAction(settings_action)
     
     def _create_status_bar(self):
         """Create application status bar"""
@@ -546,12 +543,65 @@ class BootForgeMainWindow(QMainWindow):
                 )
                 
                 if confirm == QMessageBox.StandardButton.Yes:
-                    QMessageBox.information(
-                        self,
-                        "Format Requested",
-                        f"Format operation would be performed on:\n{device_combo.currentText()}\n\nFormat type: {selected_format}\n\nNote: For actual formatting, use the USB Builder wizard which includes proper safety checks."
+                    # Map format type to filesystem
+                    fs_map = {
+                        "FAT32": "fat32",
+                        "exFAT": "exfat", 
+                        "NTFS": "ntfs"
+                    }
+                    filesystem = fs_map.get(selected_format, "fat32")
+                    
+                    # Show real progress dialog with cancel button
+                    from PyQt6.QtWidgets import QProgressDialog
+                    from PyQt6.QtCore import QThread, pyqtSignal, Qt
+                    
+                    progress_dialog = QProgressDialog(
+                        f"Formatting {device_combo.currentText()}...\n\nThis may take a few minutes.",
+                        "Cancel",
+                        0, 0,  # Indeterminate progress (0-0 range)
+                        self
                     )
-                    self.logger.info(f"Format requested for device: {selected_device.path}, format: {selected_format}")
+                    progress_dialog.setWindowTitle("Formatting Device")
+                    progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+                    progress_dialog.setMinimumDuration(0)  # Show immediately
+                    progress_dialog.setCancelButton(None)  # No cancel during format (dangerous)
+                    progress_dialog.show()
+                    
+                    # Format in background thread
+                    class FormatThread(QThread):
+                        format_finished = pyqtSignal(bool, str)  # Renamed to avoid conflict with QThread.finished
+                        
+                        def __init__(self, disk_manager, device_path, filesystem):
+                            super().__init__()
+                            self.disk_manager = disk_manager
+                            self.device_path = device_path
+                            self.filesystem = filesystem
+                        
+                        def run(self):
+                            try:
+                                success = self.disk_manager.format_device(self.device_path, self.filesystem)
+                                if success:
+                                    self.format_finished.emit(True, "Device formatted successfully!")
+                                else:
+                                    self.format_finished.emit(False, "Format operation failed. Check permissions and device status.")
+                            except Exception as e:
+                                self.format_finished.emit(False, f"Format error: {str(e)}")
+                    
+                    def on_format_finished(success: bool, message: str):
+                        progress_dialog.close()
+                        if success:
+                            QMessageBox.information(self, "Format Complete", message)
+                            self.logger.info(f"Successfully formatted {selected_device.path} as {filesystem}")
+                        else:
+                            QMessageBox.critical(self, "Format Failed", message)
+                            self.logger.error(f"Format failed for {selected_device.path}: {message}")
+                        # Clean up thread reference
+                        if hasattr(self, '_format_thread'):
+                            self._format_thread = None
+                    
+                    self._format_thread = FormatThread(self.disk_manager, selected_device.path, filesystem)
+                    self._format_thread.format_finished.connect(on_format_finished)
+                    self._format_thread.start()
         
         except Exception as e:
             self.logger.error(f"Error in format device dialog: {e}")

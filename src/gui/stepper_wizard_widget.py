@@ -402,9 +402,33 @@ class HardwareDetectionStepView(StepView):
         self.detect_button.clicked.connect(self._start_detection)
         button_layout.addWidget(self.detect_button)
         
-        # Manual Selection button (DISABLED - under development)
-        # self.manual_button = QPushButton("🧭 Manual Selection")
-        # Temporarily disabled until threading issues are resolved
+        # Manual Selection button (for selecting other computers)
+        self.manual_button = QPushButton("🧭 Manual Selection")
+        self.manual_button.setMinimumSize(220, 50)
+        self.manual_button.setStyleSheet("""
+            QPushButton {
+                background-color: #ff6b35;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 12px 24px;
+            }
+            QPushButton:hover {
+                background-color: #ff5722;
+            }
+            QPushButton:pressed {
+                background-color: #e64a19;
+            }
+            QPushButton:disabled {
+                background-color: #4a4a4a;
+                color: #888888;
+            }
+        """)
+        self.manual_button.clicked.connect(self._open_manual_selection)
+        self.manual_button.setToolTip("Choose hardware profile for a different computer")
+        button_layout.addWidget(self.manual_button)
         
         # Cancel button (hidden initially)
         self.cancel_button = QPushButton("Cancel Detection")
@@ -636,8 +660,15 @@ class HardwareDetectionStepView(StepView):
                 table = QTableWidget()
                 table.setColumnCount(4)
                 table.setHorizontalHeaderLabels(["Name", "Model", "Architecture", "Year"])
-                table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-                table.verticalHeader().setVisible(False)
+                
+                # Configure table headers (with None checks for Qt compatibility)
+                h_header = table.horizontalHeader()
+                if h_header is not None:
+                    h_header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+                
+                v_header = table.verticalHeader()
+                if v_header is not None:
+                    v_header.setVisible(False)
                 table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
                 table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
                 table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)

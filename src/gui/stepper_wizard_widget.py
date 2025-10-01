@@ -603,231 +603,150 @@ class HardwareDetectionStepView(StepView):
     
     def _open_manual_selection(self):
         """Open manual hardware profile selection dialog"""
-        self.logger.info("Manual Selection button clicked!")
-        
+        self.logger.info("Manual Selection button clicked")
+        # Safe import with error handling
         try:
             from src.core.hardware_profiles import get_profiles_by_platform
-            self.logger.info("Successfully imported get_profiles_by_platform")
         except Exception as e:
-            self.logger.error(f"Failed to import get_profiles_by_platform: {e}")
+            self.logger.error(f"Failed to import get_profiles_by_platform: {e}", exc_info=True)
+            QMessageBox.critical(self, "Import Error", f"Failed to load hardware profiles:\n{e}")
             return
-        
-        # Create dialog
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Manual Hardware Profile Selection")
-        dialog.setMinimumSize(800, 600)
-        dialog.setStyleSheet(f"background-color: {BootForgeTheme.COLORS['bg_primary']};")
-        
-        layout = QVBoxLayout(dialog)
-        
-        # Instructions
-        info_label = QLabel("💡 Select the hardware profile for the computer you want to create a bootable USB for.\nThis allows you to create USBs for different computers than the one you're currently using.")
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet(f"color: {BootForgeTheme.COLORS['text_secondary']}; padding: 10px; font-size: 14px;")
-        layout.addWidget(info_label)
-        
-        # Search box
-        search_layout = QHBoxLayout()
-        search_label = QLabel("🔍 Search:")
-        search_label.setStyleSheet(f"color: {BootForgeTheme.COLORS['text_primary']}; font-weight: bold;")
-        search_layout.addWidget(search_label)
-        
-        search_box = QLineEdit()
-        search_box.setPlaceholderText("Type to filter by name or model...")
-        search_box.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {BootForgeTheme.COLORS['bg_secondary']};
-                color: {BootForgeTheme.COLORS['text_primary']};
-                border: 2px solid {BootForgeTheme.COLORS['border']};
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 14px;
-            }}
-        """)
-        search_layout.addWidget(search_box)
-        layout.addLayout(search_layout)
-        
-        # Tabs for platforms
-        tabs = QTabWidget()
-        tabs.setStyleSheet(f"""
-            QTabWidget::pane {{
-                border: 2px solid {BootForgeTheme.COLORS['border']};
-                background-color: {BootForgeTheme.COLORS['bg_secondary']};
-                border-radius: 6px;
-            }}
-            QTabBar::tab {{
-                background-color: {BootForgeTheme.COLORS['bg_tertiary']};
-                color: {BootForgeTheme.COLORS['text_primary']};
-                padding: 10px 20px;
-                margin-right: 2px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-            }}
-            QTabBar::tab:selected {{
-                background-color: {BootForgeTheme.COLORS['accent']};
-                color: white;
-                font-weight: bold;
-            }}
-        """)
-        
-        # Store profile widgets for searching
-        self.profile_widgets = {}
-        self.selected_manual_profile = None
-        
-        # Create tables for each platform
-        for platform_name, platform_key in [("🍎 Mac Models", "macos"), ("🪟 Windows PCs", "windows"), ("🐧 Linux Systems", "linux")]:
-            profiles = get_profiles_by_platform(platform_key)
-            
-            table = QTableWidget()
-            table.setColumnCount(4)
-            table.setHorizontalHeaderLabels(["Name", "Model", "Architecture", "Year"])
-            table.setRowCount(len(profiles))
-            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-            table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-            table.setStyleSheet(f"""
-                QTableWidget {{
-                    background-color: {BootForgeTheme.COLORS['bg_secondary']};
-                    color: {BootForgeTheme.COLORS['text_primary']};
-                    gridline-color: {BootForgeTheme.COLORS['border']};
-                    border: none;
-                }}
-                QHeaderView::section {{
-                    background-color: {BootForgeTheme.COLORS['bg_tertiary']};
-                    color: {BootForgeTheme.COLORS['text_primary']};
-                    padding: 8px;
-                    border: none;
-                    font-weight: bold;
-                }}
-                QTableWidget::item:selected {{
-                    background-color: {BootForgeTheme.COLORS['accent']};
-                    color: white;
-                }}
-            """)
-            
-            # Populate table
-            for row, profile in enumerate(profiles):
-                name_item = QTableWidgetItem(profile.name)
-                model_item = QTableWidgetItem(profile.model)
-                arch_item = QTableWidgetItem(profile.architecture)
-                year_item = QTableWidgetItem(str(getattr(profile, 'year', 'N/A')))
-                
-                table.setItem(row, 0, name_item)
-                table.setItem(row, 1, model_item)
-                table.setItem(row, 2, arch_item)
-                table.setItem(row, 3, year_item)
-                
-                # Store profile data
-                name_item.setData(Qt.ItemDataRole.UserRole, profile)
-                
-                # Store for search
-                self.profile_widgets[f"{profile.name} {profile.model}".lower()] = (table, row)
-            
-            # Handle selection
-            def make_selection_handler(tbl):
-                def handler():
-                    selected = tbl.selectedItems()
-                    if selected:
-                        self.selected_manual_profile = selected[0].data(Qt.ItemDataRole.UserRole)
-                return handler
-            
-            table.itemSelectionChanged.connect(make_selection_handler(table))
-            
-            # Configure header (with error handling for platform differences)
-            try:
-                header = table.horizontalHeader()
-                if header:
-                    header.setStretchLastSection(True)
-                    # Try to set resize mode for first column
-                    try:
-                        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-                    except (AttributeError, TypeError):
-                        # Try applying to all columns as fallback
-                        try:
-                            header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-                        except:
-                            # Continue with just setStretchLastSection
-                            pass
-            except Exception as e:
-                self.logger.warning(f"Could not configure table header: {e}")
-            
-            tabs.addTab(table, platform_name)
-        
-        # Search functionality
-        def filter_profiles(text):
-            text = text.lower()
-            for search_key, (table, row) in self.profile_widgets.items():
-                if text in search_key:
-                    table.showRow(row)
-                else:
-                    table.hideRow(row)
-        
-        search_box.textChanged.connect(filter_profiles)
-        
-        layout.addWidget(tabs)
-        
-        # Buttons
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        button_box.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {BootForgeTheme.COLORS['accent']};
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-weight: bold;
-                min-width: 100px;
-            }}
-            QPushButton:hover {{
-                background-color: {BootForgeTheme.COLORS['accent_hover']};
-            }}
-        """)
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        layout.addWidget(button_box)
-        
-        # Show dialog
-        if dialog.exec() == QDialog.DialogCode.Accepted and self.selected_manual_profile:
-            self.logger.info(f"Manual profile selected: {self.selected_manual_profile.name}")
-            
-            # Wrap profile in a ProfileMatch object
-            from src.core.hardware_detector import ProfileMatch
-            manual_match = ProfileMatch(
-                profile=self.selected_manual_profile,
-                match_score=0.0,
-                match_reasons=["Manual selection - user chose this profile for a different computer"],
-                confidence=DetectionConfidence.UNKNOWN,
-                detection_data=None
-            )
-            
-            # Set as selected profile
-            self.selected_profile = manual_match
-            self.profile_matches = [manual_match]
-            
-            # Update UI
-            self.status_label.setText(f"✅ Manually selected: {self.selected_manual_profile.name}")
-            self.status_label.setStyleSheet(f"color: {BootForgeTheme.COLORS['accent']}; font-size: 16px; font-weight: bold; padding: 10px;")
-            
-            # Show results
-            self.results_group.setVisible(True)
-            self.hardware_summary_label.setText(f"📱 {self.selected_manual_profile.name} (Manual Selection)")
-            self.hardware_details.setPlainText(f"""Platform: {self.selected_manual_profile.platform.title()}
-Model: {self.selected_manual_profile.model}
-Architecture: {self.selected_manual_profile.architecture}
-CPU: {self.selected_manual_profile.cpu_family}
 
-⚠️ NOTE: You manually selected this profile. Make sure you're creating the USB for the correct computer!
-            """)
-            
-            # Populate profile dropdown with manual selection
-            self.profile_combo.clear()
-            self.profile_combo.addItem(f"🧭 {self.selected_manual_profile.name} (Manual)")
-            self.profile_combo.setItemData(0, manual_match)
-            self.profile_combo.setEnabled(False)
-            
-            # Enable next button
-            self.set_navigation_enabled(next=True)
-            self.step_completed.emit()
-    
+        try:
+            # Create dialog UI
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Manual Hardware Profile Selection")
+            dialog.setMinimumSize(800, 600)
+            layout = QVBoxLayout(dialog)
+
+            info_label = QLabel(
+                "💡 Select the hardware profile for the computer you want to create a bootable USB for.\n"
+                "This lets you create USBs for a different computer than the one you're using.")
+            info_label.setWordWrap(True)
+            layout.addWidget(info_label)
+
+            search_layout = QHBoxLayout()
+            search_layout.addWidget(QLabel("Search:"))
+            search_box = QLineEdit()
+            search_box.setPlaceholderText("Type to filter by name or model…")
+            search_layout.addWidget(search_box)
+            layout.addLayout(search_layout)
+
+            tabs = QTabWidget()
+            layout.addWidget(tabs)
+
+            # Storage for filtering and selection
+            self.profile_widgets = {}
+            self.selected_manual_profile = None
+
+            # Platforms: support macOS; handle others gracefully
+            for platform_name, platform_key in [("🍎 Mac Models", "macos"), ("🪟 Windows PCs", "windows"), ("🐧 Linux Systems", "linux")]:
+                try:
+                    if platform_key != "macos":
+                        raise NotImplementedError("Platform not supported yet")
+                    profiles = get_profiles_by_platform(platform_key) or []
+                    if not profiles:
+                        raise ValueError("No profiles found")
+                except Exception as e:
+                    placeholder = QWidget()
+                    ph_layout = QVBoxLayout(placeholder)
+                    msg = QLabel(f"{platform_name} is unavailable: {e}")
+                    msg.setWordWrap(True)
+                    ph_layout.addWidget(msg)
+                    tabs.addTab(placeholder, platform_name)
+                    continue
+
+                # Build selectable table for macOS profiles
+                table = QTableWidget()
+                table.setColumnCount(4)
+                table.setHorizontalHeaderLabels(["Name", "Model", "Architecture", "Year"])
+                table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+                table.verticalHeader().setVisible(False)
+                table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+                table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+                table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+                table.setRowCount(len(profiles))
+
+                for row, p in enumerate(profiles):
+                    name = getattr(p, "name", "") or str(getattr(p, "model", "Unknown"))
+                    model = getattr(p, "model", "Unknown")
+                    arch = getattr(p, "architecture", getattr(p, "arch", "Unknown"))
+                    year = getattr(p, "year", getattr(p, "release_year", ""))
+                    table.setItem(row, 0, QTableWidgetItem(str(name)))
+                    table.setItem(row, 1, QTableWidgetItem(str(model)))
+                    table.setItem(row, 2, QTableWidgetItem(str(arch)))
+                    table.setItem(row, 3, QTableWidgetItem(str(year)))
+
+                def on_selection_changed(tbl=table, profs=profiles):
+                    r = tbl.currentRow()
+                    if 0 <= r < len(profs):
+                        self.selected_manual_profile = profs[r]
+
+                table.itemSelectionChanged.connect(on_selection_changed)
+                table.itemDoubleClicked.connect(lambda *_: dialog.accept())
+
+                tabs.addTab(table, platform_name)
+                self.profile_widgets[platform_key] = {"table": table, "profiles": profiles}
+
+            # Search filter across tables
+            def filter_profiles(text: str):
+                t = (text or "").strip().lower()
+                for data in self.profile_widgets.values():
+                    tbl = data["table"]
+                    profs = data["profiles"]
+                    for row, p in enumerate(profs):
+                        hay = f"{getattr(p, 'name', '')} {getattr(p, 'model', '')}".lower()
+                        tbl.setRowHidden(row, t not in hay)
+
+            search_box.textChanged.connect(filter_profiles)
+
+            # Buttons
+            button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            button_box.accepted.connect(dialog.accept)
+            button_box.rejected.connect(dialog.reject)
+            layout.addWidget(button_box)
+
+            # Accept selection and update UI
+            if dialog.exec() == QDialog.DialogCode.Accepted and self.selected_manual_profile:
+                p = self.selected_manual_profile
+                manual_match = ProfileMatch(
+                    profile=p,
+                    match_score=0.0,
+                    match_reasons=["Manual selection - user chose this profile for a different computer"],
+                    confidence=DetectionConfidence.UNKNOWN,
+                    detection_data=None,
+                )
+                self.selected_profile = manual_match
+                self.profile_matches = [manual_match]
+
+                name = getattr(p, "name", "Unknown")
+                self.status_label.setText(f"✅ Manually selected: {name}")
+                self.results_group.setVisible(True)
+                self.hardware_summary_label.setText(f"📱 {name} (Manual Selection)")
+                details = (
+                    f"Platform: {str(getattr(p, 'platform', 'macOS')).title()}\n"
+                    f"Model: {getattr(p, 'model', 'Unknown')}\n"
+                    f"Architecture: {getattr(p, 'architecture', getattr(p, 'arch', 'Unknown'))}\n"
+                    f"CPU: {getattr(p, 'cpu_family', 'Unknown')}\n\n"
+                    "⚠️ NOTE: You manually selected this profile. Make sure you're creating the USB for the correct computer!"
+                )
+                self.hardware_details.setPlainText(details)
+                self.profile_combo.clear()
+                self.profile_combo.addItem(f"🧭 {name} (Manual)")
+                self.profile_combo.setItemData(0, manual_match)
+                self.profile_combo.setEnabled(False)
+                self.set_navigation_enabled(next=True)
+                self.step_completed.emit()
+
+        except Exception as e:
+            # Top-level safety net: show dialog instead of crashing
+            self.logger.error(f"Error in manual selection dialog: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Manual Selection Error",
+                f"An error occurred while opening the manual selection dialog:\n\n{e}",
+            )
+
     def _on_detection_started(self):
         """Handle detection started signal"""
         self.logger.debug("Hardware detection started")

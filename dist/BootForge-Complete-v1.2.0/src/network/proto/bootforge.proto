@@ -1,0 +1,208 @@
+// BootForge Host Agent Protocol Buffer Definitions
+// Defines the gRPC service interface for distributed operations
+
+syntax = "proto3";
+
+package bootforge;
+
+// Host Agent Service - Main interface for remote operations
+service HostAgent {
+  // Authentication
+  rpc Authenticate(AuthRequest) returns (AuthResponse);
+  
+  // Device operations
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse);
+  rpc GetDeviceInfo(DeviceInfoRequest) returns (DeviceInfoResponse);
+  
+  // Disk operations with streaming progress
+  rpc WriteImage(WriteImageRequest) returns (stream OperationProgress);
+  rpc FormatDevice(FormatDeviceRequest) returns (stream OperationProgress);
+  rpc VerifyImage(VerifyImageRequest) returns (stream OperationProgress);
+  
+  // System monitoring
+  rpc GetSystemStatus(SystemStatusRequest) returns (SystemStatusResponse);
+  rpc StreamSystemStatus(SystemStatusRequest) returns (stream SystemStatusResponse);
+  
+  // File operations for image transfer
+  rpc UploadImage(stream ImageChunk) returns (UploadImageResponse);
+  rpc DownloadLogs(DownloadLogsRequest) returns (stream LogChunk);
+}
+
+// Authentication messages
+message AuthRequest {
+  string username = 1;
+  string password = 2;
+  string client_id = 3;
+}
+
+message AuthResponse {
+  bool success = 1;
+  string token = 2;
+  string message = 3;
+  int64 expires_at = 4; // Unix timestamp
+}
+
+// Device listing and information
+message ListDevicesRequest {
+  string auth_token = 1;
+  bool include_non_removable = 2; // Include fixed drives
+}
+
+message DeviceInfo {
+  string path = 1;
+  string name = 2;
+  int64 size_bytes = 3;
+  string filesystem = 4;
+  string mountpoint = 5;
+  bool is_removable = 6;
+  string model = 7;
+  string vendor = 8;
+  string serial = 9;
+  string health_status = 10;
+  double write_speed_mbps = 11;
+  bool is_mounted = 12;
+  repeated string partitions = 13;
+}
+
+message ListDevicesResponse {
+  bool success = 1;
+  string message = 2;
+  repeated DeviceInfo devices = 3;
+}
+
+message DeviceInfoRequest {
+  string auth_token = 1;
+  string device_path = 2;
+}
+
+message DeviceInfoResponse {
+  bool success = 1;
+  string message = 2;
+  DeviceInfo device = 3;
+}
+
+// Disk operation requests
+message WriteImageRequest {
+  string auth_token = 1;
+  string image_path = 2;           // Local path on host or upload ID
+  string device_path = 3;
+  bool verify_after_write = 4;
+  bool force_unmount = 5;
+}
+
+message FormatDeviceRequest {
+  string auth_token = 1;
+  string device_path = 2;
+  string filesystem = 3;          // "fat32", "ntfs", "exfat", etc.
+  string label = 4;
+  bool quick_format = 5;
+}
+
+message VerifyImageRequest {
+  string auth_token = 1;
+  string image_path = 2;
+  string device_path = 3;
+}
+
+// Operation progress streaming
+message OperationProgress {
+  string operation_id = 1;
+  string operation_type = 2;      // "write", "format", "verify", "upload"
+  string current_stage = 3;       // "preparing", "writing", "verifying", "cleanup"
+  
+  // Progress information
+  int64 bytes_processed = 4;
+  int64 total_bytes = 5;
+  double percentage = 6;
+  double speed_mbps = 7;
+  int64 eta_seconds = 8;
+  
+  // Status
+  bool is_complete = 9;
+  bool is_error = 10;
+  string status_message = 11;
+  
+  // Error details
+  string error_code = 12;
+  string error_details = 13;
+  
+  // Timestamps
+  int64 started_at = 14;          // Unix timestamp
+  int64 updated_at = 15;          // Unix timestamp
+}
+
+// System monitoring
+message SystemStatusRequest {
+  string auth_token = 1;
+  bool include_detailed_metrics = 2;
+}
+
+message SystemStatusResponse {
+  bool success = 1;
+  string hostname = 2;
+  string platform = 3;           // "linux", "windows", "darwin"
+  string architecture = 4;       // "x86_64", "arm64", etc.
+  
+  // Resource usage
+  double cpu_usage_percent = 5;
+  double memory_usage_percent = 6;
+  int64 memory_total_bytes = 7;
+  int64 memory_available_bytes = 8;
+  
+  // Thermal information
+  double temperature_celsius = 9;
+  string thermal_state = 10;     // "normal", "warm", "hot", "critical"
+  
+  // Active operations
+  repeated string active_operations = 11;
+  int32 concurrent_operations = 12;
+  
+  // Host Agent status
+  string agent_version = 13;
+  int64 uptime_seconds = 14;
+  int64 timestamp = 15;          // Unix timestamp
+}
+
+// File transfer operations
+message ImageChunk {
+  string upload_id = 1;
+  string filename = 2;
+  int64 total_size = 3;
+  int64 chunk_offset = 4;
+  bytes chunk_data = 5;
+  bool is_final_chunk = 6;
+  string checksum = 7;           // Chunk checksum for verification
+}
+
+message UploadImageResponse {
+  bool success = 1;
+  string message = 2;
+  string upload_id = 3;
+  string local_path = 4;         // Path on host where image is stored
+  int64 bytes_received = 5;
+  string checksum = 6;           // Full file checksum
+}
+
+message DownloadLogsRequest {
+  string auth_token = 1;
+  string log_type = 2;           // "main", "errors", "operations"
+  int64 since_timestamp = 3;     // Download logs since this time
+  int32 max_lines = 4;           // Limit number of log lines
+}
+
+message LogChunk {
+  string log_type = 1;
+  string content = 2;
+  int64 timestamp = 3;
+  bool is_final_chunk = 4;
+}
+
+// Network discovery (for mDNS service registration)
+message ServiceInfo {
+  string service_name = 1;       // "BootForge Host Agent"
+  string host_name = 2;          // Computer hostname
+  string ip_address = 3;
+  int32 port = 4;
+  string version = 5;
+  map<string, string> properties = 6; // Additional service properties
+}

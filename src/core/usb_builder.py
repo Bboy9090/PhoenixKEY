@@ -398,9 +398,68 @@ class StorageBuilder(QThread):
     def _create_partitions_macos(self) -> bool:
         """Create partitions on macOS using diskutil"""
         try:
-            # This is a simplified implementation
-            # Real implementation would use diskutil for proper macOS partition creation
-            self._log_message("INFO", "macOS partition creation not fully implemented")
+            if not self.recipe:
+                self._log_message("ERROR", "No recipe available")
+                return False
+            
+            # Get disk identifier (e.g., /dev/disk2 -> disk2)
+            disk_id = self.target_device.split('/')[-1]
+            
+            self._log_message("INFO", f"Creating GPT partition scheme on {disk_id}")
+            
+            # Unmount the disk first
+            subprocess.run(['diskutil', 'unmountDisk', 'force', disk_id], 
+                         capture_output=True, text=True)
+            
+            # Build diskutil partition command
+            # Format: diskutil partitionDisk disk_id GPT partition_type name size ...
+            partition_cmd = ['diskutil', 'partitionDisk', disk_id, 'GPT']
+            
+            for partition in self.recipe.partitions:
+                # Determine filesystem type for diskutil
+                if partition.filesystem == FileSystem.FAT32:
+                    fs_type = "MS-DOS FAT32"
+                elif partition.filesystem == FileSystem.HFS_PLUS:
+                    fs_type = "HFS+"
+                elif partition.filesystem == FileSystem.APFS:
+                    fs_type = "APFS"
+                elif partition.filesystem == FileSystem.EXFAT:
+                    fs_type = "ExFAT"
+                elif partition.filesystem is None:
+                    fs_type = "Free Space"
+                else:
+                    fs_type = "MS-DOS FAT32"  # Default fallback
+                
+                partition_cmd.append(fs_type)
+                partition_cmd.append(partition.label)
+                
+                # Size specification
+                if partition.size_mb == -1:
+                    partition_cmd.append("R")  # Use remaining space
+                else:
+                    partition_cmd.append(f"{partition.size_mb}M")
+            
+            # Execute partition creation
+            result = subprocess.run(partition_cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                self._log_message("ERROR", f"Failed to partition disk: {result.stderr}")
+                return False
+            
+            # Add rollback operation
+            self._partition_table_created = True
+            self._add_rollback_operation(
+                lambda: subprocess.run(
+                    ['diskutil', 'eraseDisk', 'FAT32', 'EMPTY', 'GPT', disk_id], 
+                    capture_output=True, check=False
+                )
+            )
+            
+            self._log_message("INFO", f"Successfully created {len(self.recipe.partitions)} partitions")
+            
+            # Wait for partitions to be ready
+            time.sleep(2)
+            
             return True
             
         except Exception as e:
@@ -410,12 +469,141 @@ class StorageBuilder(QThread):
     def _create_partitions_windows(self) -> bool:
         """Create partitions on Windows using diskpart"""
         try:
-            # This would require implementing Windows diskpart scripting
-            self._log_message("INFO", "Windows partition creation not fully implemented")
+            if not self.recipe:
+                self._log_message("ERROR", "No recipe available")
+                return False
+            
+            # Get disk number from device path (e.g., \\.\PhysicalDrive1 -> 1)
+            if "PhysicalDrive" in self.target_device:
+                disk_num = self.target_device.split("PhysicalDrive")[-1]
+            else:
+                # Try to extract disk number
+                import re
+                match = re.search(r'(\d+)$', self.target_device)
+                if match:
+                    disk_num = match.group(1)
+                else:
+                    self._log_message("ERROR", f"Cannot determine disk number from {self.target_device}")
+                    return False
+            
+            self._log_message("INFO", f"Creating GPT partition scheme on disk {disk_num}")
+            
+            # Build diskpart script
+            diskpart_script = []
+            diskpart_script.append(f"select disk {disk_num}")
+            diskpart_script.append("clean")
+            
+            # Create partition table based on scheme
+            if self.recipe.partition_scheme == PartitionScheme.GPT:
+                diskpart_script.append("convert gpt")
+            else:
+                diskpart_script.append("convert mbr")
+            
+            # Create each partition
+            for i, partition in enumerate(self.recipe.partitions, 1):
+                # Determine partition type
+                if partition.filesystem == FileSystem.FAT32 and i == 1:
+                    # EFI system partition
+                    if partition.size_mb == -1:
+                        diskpart_script.append("create partition efi")
+                    else:
+                        diskpart_script.append(f"create partition efi size={partition.size_mb}")
+                else:
+                    # Primary partition
+                    if partition.size_mb == -1:
+                        diskpart_script.append("create partition primary")
+                    else:
+                        diskpart_script.append(f"create partition primary size={partition.size_mb}")
+                
+                # Select the partition we just created
+                diskpart_script.append(f"select partition {i}")
+                
+                # Format with appropriate filesystem
+                if partition.filesystem:
+                    if partition.filesystem == FileSystem.FAT32:
+                        diskpart_script.append(f"format quick fs=fat32 label={partition.label}")
+                    elif partition.filesystem == FileSystem.NTFS:
+                        diskpart_script.append(f"format quick fs=ntfs label={partition.label}")
+                    elif partition.filesystem == FileSystem.EXFAT:
+                        diskpart_script.append(f"format quick fs=exfat label={partition.label}")
+                
+                # Set bootable if needed
+                if partition.bootable:
+                    diskpart_script.append("active")
+                
+                # Assign drive letter temporarily (will be removed after completion)
+                diskpart_script.append("assign")
+                
+                self._log_message("INFO", f"Added partition {i}: {partition.name} ({partition.size_mb}MB)")
+            
+            diskpart_script.append("exit")
+            
+            # Write diskpart script to temp file
+            script_path = Path(tempfile.gettempdir()) / "bootforge_diskpart.txt"
+            with open(script_path, 'w') as f:
+                f.write('\n'.join(diskpart_script))
+            
+            self._log_message("DEBUG", f"Diskpart script:\n{chr(10).join(diskpart_script)}")
+            
+            # Execute diskpart
+            result = subprocess.run(
+                ['diskpart', '/s', str(script_path)],
+                capture_output=True, text=True, shell=True
+            )
+            
+            # Cleanup script file
+            try:
+                script_path.unlink()
+            except:
+                pass
+            
+            if result.returncode != 0:
+                self._log_message("ERROR", f"Diskpart failed: {result.stderr}")
+                return False
+            
+            # Add rollback operation
+            self._partition_table_created = True
+            rollback_script = [
+                f"select disk {disk_num}",
+                "clean",
+                "exit"
+            ]
+            self._add_rollback_operation(
+                lambda: self._run_diskpart_script(rollback_script)
+            )
+            
+            self._log_message("INFO", f"Successfully created {len(self.recipe.partitions)} partitions")
+            
+            # Wait for Windows to recognize partitions
+            time.sleep(3)
+            
             return True
             
         except Exception as e:
             self._log_message("ERROR", f"Error creating Windows partitions: {e}")
+            return False
+    
+    def _run_diskpart_script(self, script_lines: List[str]) -> bool:
+        """Helper method to run diskpart commands"""
+        try:
+            script_path = Path(tempfile.gettempdir()) / f"bootforge_rollback_{uuid.uuid4().hex[:8]}.txt"
+            with open(script_path, 'w') as f:
+                f.write('\n'.join(script_lines))
+            
+            result = subprocess.run(
+                ['diskpart', '/s', str(script_path)],
+                capture_output=True, text=True, shell=True, check=False
+            )
+            
+            try:
+                script_path.unlink()
+            except:
+                pass
+            
+            return result.returncode == 0
+            
+        except Exception as e:
+            self.logger.error(f"Failed to run diskpart script: {e}")
             return False
     
     def _format_partitions(self) -> bool:

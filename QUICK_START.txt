@@ -1,0 +1,97 @@
+═══════════════════════════════════════════════════════════════
+  🚀 BootForge - Create Bootable macOS USB for iMac 18,1
+═══════════════════════════════════════════════════════════════
+
+WHAT YOU NEED:
+✅ A USB drive (16GB+ for installer)
+✅ Internet connection (to download macOS installer)
+✅ This BootForge package
+
+STEP-BY-STEP GUIDE:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. DOWNLOAD THE PACKAGE
+   📦 Download: BootForge-USB-Toolkit.zip (65MB)
+   📂 Extract to any folder
+
+2. RUN BOOTFORGE
+   
+   On Mac:
+   • Open Terminal
+   • cd to extracted folder
+   • Run: python3 main.py --gui
+   
+   On Windows:
+   • Double-click: BootForge.exe (auto-starts GUI)
+   
+   On Linux:
+   • Open Terminal
+   • cd to extracted folder  
+   • Run: python3 main.py --gui
+
+3. CREATE YOUR USB (In the GUI)
+   
+   Step 1 - Hardware Detection:
+   → Click "🧭 Manual Selection"
+   → Search for "iMac 18,1"
+   → Select it
+   → Click OK
+   
+   Step 2 - Select macOS Image:
+   → Choose "macOS Ventura" (most stable for iMac 18,1)
+   → Or "macOS Sonoma" (Wi-Fi may need fixing after install)
+   → App will download installer automatically
+   
+   Step 3 - Choose USB Drive:
+   → Plug in your USB drive
+   → Select it from the list
+   → ⚠️ ALL DATA WILL BE ERASED
+   
+   Step 4 - Configure & Build:
+   → OCLP patches auto-selected for iMac 18,1
+   → Click "Start Build"
+   → Wait 20-30 minutes
+
+4. USE THE USB
+   → Plug USB into your iMac 18,1
+   → Restart while holding Option/Alt key
+   → Select "EFI Boot" or "Install macOS"
+   → Follow macOS installer
+   → After install, run OCLP Post-Install Patches
+
+═══════════════════════════════════════════════════════════════
+DOWNLOAD LINKS:
+═══════════════════════════════════════════════════════════════
+
+Option 1: Full Toolkit (Recommended)
+   📦 BootForge-USB-Toolkit.zip (65MB)
+   ✅ Complete cross-platform package
+   ✅ Includes all installers
+   ✅ Works on Mac/Windows/Linux
+
+Option 2: Source Code (For advanced users)
+   📦 Download entire /home/runner/BootForge/ folder
+   ✅ Full Python source
+   ✅ Run: python3 main.py --gui
+
+═══════════════════════════════════════════════════════════════
+TROUBLESHOOTING:
+═══════════════════════════════════════════════════════════════
+
+❓ "Manual Selection crashes the app"
+   → We're fixing this bug now
+   → Meanwhile: Let auto-detection run, then manually choose from results
+
+❓ "Can't run on Windows"
+   → Install Python 3.8+ from python.org
+   → Or wait for standalone .exe (coming soon)
+
+❓ "macOS download fails"
+   → Check internet connection
+   → Try downloading installer manually from Apple
+
+❓ "iMac won't boot from USB"
+   → Hold Option key during boot
+   → Make sure Secure Boot is disabled in Recovery Mode
+
+═══════════════════════════════════════════════════════════════

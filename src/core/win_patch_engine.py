@@ -253,7 +253,23 @@ class WinPatchEngine:
                 risk_level=ValidationResult.WARNING,
                 user_warning="Systems with <4GB RAM may experience poor performance with Windows 11."
             ),
-            
+
+            # Secure Boot Bypass for Windows 11
+            WindowsBypass(
+                bypass_type=WindowsBypassType.SECURE_BOOT_BYPASS,
+                name="Secure Boot Requirement Bypass",
+                description="Allows installation on systems without Secure Boot or when legacy BIOS mode is required",
+                registry_keys={
+                    "HKLM\\SYSTEM\\Setup\\LabConfig": {
+                        "BypassSecureBootCheck": ("REG_DWORD", 1),
+                    }
+                },
+                required_for_windows=["11"],
+                hardware_patterns=[r".*Legacy.*", r".*BIOS.*", r".*"],
+                risk_level=ValidationResult.WARNING,
+                user_warning="Disabling Secure Boot reduces firmware-level protections against bootkits and persistent malware."
+            ),
+
             # CPU Bypass for Windows 11
             WindowsBypass(
                 bypass_type=WindowsBypassType.CPU_BYPASS,

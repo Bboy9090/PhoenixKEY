@@ -8,7 +8,7 @@ import os
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 
 
 @dataclass
@@ -35,13 +35,15 @@ class Config:
     
     def __init__(self, config_file: Optional[str] = None):
         self.logger = logging.getLogger(__name__)
-        
+
         # Default configuration paths
         self.app_dir = Path.home() / ".bootforge"
         self.config_file = config_file or str(self.app_dir / "config.json")
-        
+
         # Initialize configuration
         self._config = AppConfig()
+        self._custom_settings: Dict[str, Any] = {}
+        self._known_fields = {f.name for f in fields(AppConfig)}
         self._ensure_directories()
         self.load()
     
@@ -65,7 +67,9 @@ class Config:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r') as f:
                     data = json.load(f)
-                    self._config = AppConfig(**data)
+                    app_values = {k: v for k, v in data.items() if k in self._known_fields}
+                    self._custom_settings = {k: v for k, v in data.items() if k not in self._known_fields}
+                    self._config = AppConfig(**app_values)
                     self.logger.info(f"Configuration loaded from {self.config_file}")
                     return True
             else:
@@ -75,33 +79,37 @@ class Config:
         except Exception as e:
             self.logger.error(f"Error loading configuration: {e}")
             return False
-    
+
     def save(self) -> bool:
         """Save configuration to file"""
         try:
             self._ensure_directories()
             with open(self.config_file, 'w') as f:
-                json.dump(asdict(self._config), f, indent=2)
+                data = asdict(self._config)
+                data.update(self._custom_settings)
+                json.dump(data, f, indent=2)
             self.logger.info(f"Configuration saved to {self.config_file}")
             return True
         except Exception as e:
             self.logger.error(f"Error saving configuration: {e}")
             return False
-    
+
     def get(self, key: str, default: Any = None) -> Any:
         """Get configuration value"""
-        return getattr(self._config, key, default)
-    
+        if hasattr(self._config, key):
+            return getattr(self._config, key)
+        return self._custom_settings.get(key, default)
+
     def set(self, key: str, value: Any) -> bool:
         """Set configuration value"""
         try:
-            if hasattr(self._config, key):
+            if key in self._known_fields:
                 setattr(self._config, key, value)
                 self.logger.debug(f"Configuration updated: {key} = {value}")
                 return True
-            else:
-                self.logger.warning(f"Unknown configuration key: {key}")
-                return False
+            self._custom_settings[key] = value
+            self.logger.debug(f"Custom configuration updated: {key} = {value}")
+            return True
         except Exception as e:
             self.logger.error(f"Error setting configuration: {e}")
             return False
@@ -126,4 +134,6 @@ class Config:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary"""
-        return asdict(self._config)
+        data = asdict(self._config)
+        data.update(self._custom_settings)
+        return data

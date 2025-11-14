@@ -56,6 +56,7 @@ Phoenix Key must self-audit its partitions at boot, validate filesystem health, 
 ### macOS Integration (Phoenix Method)
 - macOS installers are not bundled; instead, the Phoenix Mac Tools workflow prompts users to connect a compliant installer.
 - Provides scripted guidance for NVRAM/SMC resets, disk sanitization, EFI cleaning, and boot chain repairs.
+- Integrates **Tahoe macOS 26** workflows alongside a **Fidera Ahsari compatibility layer** that stages recovery payloads tailored for Apple Silicon (M1/M2) targets while maintaining Intel support.
 - OCLP guidance and BootCamp compatibility checklists included in offline documentation.
 
 ---
@@ -69,6 +70,7 @@ Organized categories and example tooling:
 - **Security & Malware**: Kaspersky, Bitdefender, and ESET rescue ISOs with offline update packs.
 - **Hardware Validation**: MemTest86, CPU/GPU stress suites, SMART dashboards, fan/thermal monitors.
 - **Emergency Kits**: BIOS dumpers, OEM provisioning suites, Phoenix "Save My Data" automated copy utility.
+- **Apple Silicon Toolkit**: Fidera Ahsari-powered drivers, firmware repair helpers, and Tahoe macOS 26 patchsets for post-recovery validation.
 
 Phoenix Tool Scanner indexes new ISOs dropped onto the drive, auto-categorizes them, and updates menu metadata including descriptions, icons, and hardware requirements.
 
@@ -119,7 +121,7 @@ Phoenix Tool Scanner indexes new ISOs dropped onto the drive, auto-categorizes t
 3. **Recovery Arsenal Integration (Sprint 5-6)**
    - Package core imaging, partitioning, security, and hardware validation suites.
 4. **Phoenix Mac Tools (Sprint 6-7)**
-   - Deliver guided macOS recovery flows, BootCamp automation hooks, and OCLP documentation.
+   - Deliver guided macOS recovery flows, BootCamp automation hooks, Tahoe macOS 26 provisioning, and Fidera Ahsari compatibility packs with OCLP documentation.
 5. **Experience Polish (Sprint 8-9)**
    - Finalize GUI/web experiences, add thermal-aware flashing, offline license verifier, and documentation overlays.
 6. **QA & Certification (Sprint 10)**

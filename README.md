@@ -28,8 +28,8 @@ BootForge is a comprehensive, professional-grade tool for creating bootable USB 
 - **Multi-Drive**: Support for writing to multiple drives simultaneously
 
 ### Professional Tools
-- **Checkra1n Integration**: iOS jailbreak workflow support
 - **EFI/UEFI Support**: Advanced boot configuration
+- **Apple Platform Recovery**: Tahoe macOS 26 prep with Fidera Ahsari compatibility and check8-based DFU guidance
 - **Serial Modification**: Hardware identification management
 - **Cloud Offload**: Handle large images with limited local storage
 - **Thermal Protection**: Automatic pause on system overheating
@@ -118,12 +118,6 @@ Comprehensive USB drive health checking:
 - SMART data analysis
 - Performance benchmarking
 
-### Checkra1n Integration Plugin
-iOS jailbreak workflow support:
-- Device compatibility checking
-- Automated jailbreak process
-- Bypass workflow management
-
 ## Configuration
 
 BootForge stores configuration in `~/.bootforge/`:
@@ -165,7 +159,6 @@ bootforge/
 │   ├── plugins/           # Plugin system
 │   │   ├── plugin_manager.py # Plugin management
 │   │   ├── driver_injector.py # Driver injection
-│   │   ├── checkra1n_integration.py # iOS tools
 │   │   └── diagnostics.py     # USB diagnostics
 │   └── installers/        # Packaging scripts
 │       └── build_installer.py # Cross-platform builds

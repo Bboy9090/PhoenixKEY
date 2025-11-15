@@ -122,6 +122,7 @@ Phoenix Tool Scanner indexes new ISOs dropped onto the drive, auto-categorizes t
    - Package core imaging, partitioning, security, and hardware validation suites.
 4. **Phoenix Mac Tools (Sprint 6-7)**
    - Deliver guided macOS recovery flows, BootCamp automation hooks, Tahoe macOS 26 provisioning, and Fidera Ahsari compatibility packs with OCLP documentation.
+   - Scope check8-based Mac DFU/bridgeOS recovery tooling for T2-era laptops without introducing mobile jailbreak workflows.
 5. **Experience Polish (Sprint 8-9)**
    - Finalize GUI/web experiences, add thermal-aware flashing, offline license verifier, and documentation overlays.
 6. **QA & Certification (Sprint 10)**

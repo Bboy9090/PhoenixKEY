@@ -123,7 +123,7 @@ class TestPluginManager:
             
             # Check for expected plugins
             plugin_names = [p.name for p in plugins]
-            expected_plugins = ["DriverInjector", "Checkra1nIntegration", "Diagnostics"]
+            expected_plugins = ["DriverInjector", "Diagnostics"]
             
             for expected in expected_plugins:
                 assert expected in plugin_names

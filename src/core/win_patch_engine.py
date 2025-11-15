@@ -269,7 +269,23 @@ class WinPatchEngine:
                 risk_level=ValidationResult.WARNING,
                 user_warning="Older CPUs may not support all Windows 11 features and security improvements."
             ),
-            
+
+            # Secure Boot Bypass for Windows 11
+            WindowsBypass(
+                bypass_type=WindowsBypassType.SECURE_BOOT_BYPASS,
+                name="Secure Boot Compatibility Bypass",
+                description="Allows installation on systems without Secure Boot or in legacy BIOS mode",
+                registry_keys={
+                    "HKLM\\SYSTEM\\Setup\\LabConfig": {
+                        "BypassSecureBootCheck": ("REG_DWORD", 1),
+                    }
+                },
+                required_for_windows=["11"],
+                hardware_patterns=[r".*Legacy.*", r".*BIOS.*"],
+                risk_level=ValidationResult.WARNING,
+                user_warning="Disabling Secure Boot reduces firmware protection; restore defaults after installation."
+            ),
+
             # Storage Bypass for Windows 11
             WindowsBypass(
                 bypass_type=WindowsBypassType.STORAGE_BYPASS,

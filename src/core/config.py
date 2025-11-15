@@ -8,7 +8,7 @@ import os
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field, fields
 
 
 @dataclass
@@ -22,6 +22,7 @@ class AppConfig:
     thermal_threshold: float = 85.0
     auto_update_check: bool = True
     plugin_directories: Optional[List[str]] = None
+    extras: Dict[str, Any] = field(default_factory=dict)
     
     def __post_init__(self):
         if self.plugin_directories is None:
@@ -65,7 +66,12 @@ class Config:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r') as f:
                     data = json.load(f)
-                    self._config = AppConfig(**data)
+                    known_fields = {f.name for f in fields(AppConfig)}
+                    init_kwargs = {k: v for k, v in data.items() if k in known_fields}
+                    extras = {k: v for k, v in data.items() if k not in known_fields}
+                    self._config = AppConfig(**init_kwargs)
+                    if extras:
+                        self._config.extras.update(extras)
                     self.logger.info(f"Configuration loaded from {self.config_file}")
                     return True
             else:
@@ -81,7 +87,10 @@ class Config:
         try:
             self._ensure_directories()
             with open(self.config_file, 'w') as f:
-                json.dump(asdict(self._config), f, indent=2)
+                data = asdict(self._config)
+                extras = data.pop("extras", {})
+                data.update(extras)
+                json.dump(data, f, indent=2)
             self.logger.info(f"Configuration saved to {self.config_file}")
             return True
         except Exception as e:
@@ -90,7 +99,9 @@ class Config:
     
     def get(self, key: str, default: Any = None) -> Any:
         """Get configuration value"""
-        return getattr(self._config, key, default)
+        if hasattr(self._config, key):
+            return getattr(self._config, key, default)
+        return self._config.extras.get(key, default)
     
     def set(self, key: str, value: Any) -> bool:
         """Set configuration value"""
@@ -99,9 +110,10 @@ class Config:
                 setattr(self._config, key, value)
                 self.logger.debug(f"Configuration updated: {key} = {value}")
                 return True
-            else:
-                self.logger.warning(f"Unknown configuration key: {key}")
-                return False
+
+            self._config.extras[key] = value
+            self.logger.debug(f"Configuration extra stored: {key} = {value}")
+            return True
         except Exception as e:
             self.logger.error(f"Error setting configuration: {e}")
             return False
@@ -126,4 +138,7 @@ class Config:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary"""
-        return asdict(self._config)
+        data = asdict(self._config)
+        extras = data.pop("extras", {})
+        data.update(extras)
+        return data

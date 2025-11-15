@@ -26,9 +26,8 @@ zeroconf>=0.132.0
 # macOS: diskutil (built-in)
 # Windows: format (built-in)
 
-# Optional mobile device support
-# libimobiledevice (system package)
-# checkra1n (external tool)
+# Optional Apple platform support
+# libimobiledevice (system package for device detection, optional)
 grpcio
 grpcio-tools
 protobuf

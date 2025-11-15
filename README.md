@@ -1,6 +1,14 @@
-# BootForge - Professional Cross-Platform OS Deployment Tool
+# Phoenix Key by BootForge — Professional Cross-Platform OS Deployment Tool
 
-BootForge is a comprehensive, professional-grade tool for creating bootable USB drives for macOS, Windows, and Linux operating systems. It features a modular plugin architecture, advanced system monitoring, and support for both GUI and CLI interfaces.
+Phoenix Key by BootForge is a comprehensive, professional-grade tool for creating bootable USB drives for macOS, Windows, and Linux operating systems. It features a modular plugin architecture, advanced system monitoring, and support for both GUI and CLI interfaces.
+
+> **Looking for the Phoenix Key master plan?** Read the [BootForge Phoenix Key — Legendary Forge Blueprint](docs/phoenix_key_legendary_blueprint.md) for the full multi-platform recovery vision, product pillars, and implementation roadmap.
+
+### Phoenix Key Brand Assets
+
+* Explore the [Phoenix Key Brand Guide](docs/phoenix_brand/brand_guide.md) for color palettes, typography, and usage rules.
+* Source-ready SVGs live under [`assets/logo/`](assets/logo/) and include badge, wordmark, and monochrome variants tuned for UI, packaging, and engraving workflows.
+
 
 ## Features
 
@@ -20,8 +28,8 @@ BootForge is a comprehensive, professional-grade tool for creating bootable USB 
 - **Multi-Drive**: Support for writing to multiple drives simultaneously
 
 ### Professional Tools
-- **Checkra1n Integration**: iOS jailbreak workflow support
 - **EFI/UEFI Support**: Advanced boot configuration
+- **Apple Platform Recovery**: Tahoe macOS 26 prep with Fidera Ahsari compatibility and check8-based DFU guidance
 - **Serial Modification**: Hardware identification management
 - **Cloud Offload**: Handle large images with limited local storage
 - **Thermal Protection**: Automatic pause on system overheating
@@ -34,27 +42,27 @@ BootForge is a comprehensive, professional-grade tool for creating bootable USB 
 
 ### From Source
 ```bash
-# Clone the repository
-git clone https://github.com/bootforge/bootforge.git
-cd bootforge
+# Clone the repository (rename the GitHub project to `phoenix-key` before cloning)
+git clone https://github.com/bootforge/phoenix-key.git
+cd phoenix-key
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Run BootForge
+# Run Phoenix Key
 python main.py --help
 ```
 
 ### Binary Releases
-Download pre-built binaries from the [Releases](https://github.com/bootforge/bootforge/releases) page:
-- **Windows**: `BootForge-Setup.exe`
-- **macOS**: `BootForge-1.0.0.dmg`
-- **Linux**: `BootForge-1.0.0-x86_64.AppImage`
+Download pre-built binaries from the [Releases](https://github.com/bootforge/phoenix-key/releases) page:
+- **Windows**: `PhoenixKey-Setup.exe`
+- **macOS**: `PhoenixKey-1.0.0.dmg`
+- **Linux**: `PhoenixKey-1.0.0-x86_64.AppImage`
 
 ## Usage
 
 ### CLI Interface (Recommended)
-BootForge includes a comprehensive CLI interface for all operations:
+Phoenix Key includes a comprehensive CLI interface for all operations:
 
 ```bash
 # List available USB devices
@@ -84,9 +92,18 @@ For desktop environments with OpenGL support:
 python main.py --gui
 ```
 
+### PhoenixDocs Offline Library
+Generate the themed PhoenixDocs knowledge base for offline use and the Phoenix Web GUI:
+
+```bash
+python main.py build-phoenix-docs --output dist/phoenix_docs_html
+```
+
+The command renders every Markdown guide in `docs/phoenix_docs/`, produces HTML artefacts, and writes a manifest (`phoenix_docs_manifest.json`) consumed by the Phoenix Key web interface.
+
 ## Plugin System
 
-BootForge features a modular plugin architecture with built-in plugins:
+Phoenix Key features a modular plugin architecture with built-in plugins:
 
 ### Driver Injector Plugin
 Inject drivers and kexts into OS images:
@@ -101,15 +118,9 @@ Comprehensive USB drive health checking:
 - SMART data analysis
 - Performance benchmarking
 
-### Checkra1n Integration Plugin
-iOS jailbreak workflow support:
-- Device compatibility checking
-- Automated jailbreak process
-- Bypass workflow management
-
 ## Configuration
 
-BootForge stores configuration in `~/.bootforge/`:
+Phoenix Key currently stores configuration in `~/.bootforge/`:
 - `config.json`: Main configuration file
 - `logs/`: Application logs
 - `plugins/`: User plugins directory
@@ -131,7 +142,7 @@ BootForge stores configuration in `~/.bootforge/`:
 
 ### Project Structure
 ```
-bootforge/
+phoenix-key/
 ├── main.py                 # Main application entry point
 ├── src/
 │   ├── core/              # Core system components
@@ -148,7 +159,6 @@ bootforge/
 │   ├── plugins/           # Plugin system
 │   │   ├── plugin_manager.py # Plugin management
 │   │   ├── driver_injector.py # Driver injection
-│   │   ├── checkra1n_integration.py # iOS tools
 │   │   └── diagnostics.py     # USB diagnostics
 │   └── installers/        # Packaging scripts
 │       └── build_installer.py # Cross-platform builds
@@ -163,7 +173,7 @@ bootforge/
 python src/installers/build_installer.py
 
 # Manual PyInstaller build
-pyinstaller --onefile --name=BootForge main.py
+pyinstaller --onefile --name=PhoenixKey main.py
 ```
 
 ### Running Tests
@@ -194,7 +204,7 @@ python -m pytest tests/ --cov=src
 
 ## Security Considerations
 
-⚠️ **WARNING**: BootForge performs destructive disk operations. Always:
+⚠️ **WARNING**: Phoenix Key performs destructive disk operations. Always:
 - Verify target device before writing
 - Backup important data
 - Run with appropriate privileges only
@@ -241,14 +251,14 @@ class MyPlugin(PluginBase):
 
 ## License
 
-BootForge is released under the MIT License. See [LICENSE](LICENSE) for details.
+Phoenix Key is released under the MIT License. See [LICENSE](LICENSE) for details.
 
 ## Support
 
 - **Documentation**: [docs/](docs/)
-- **Issues**: [GitHub Issues](https://github.com/bootforge/bootforge/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/bootforge/bootforge/discussions)
+- **Issues**: [GitHub Issues](https://github.com/bootforge/phoenix-key/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/bootforge/phoenix-key/discussions)
 
 ## Disclaimer
 
-BootForge is provided "as is" without warranty. Users are responsible for data safety and proper usage. Always backup important data before performing disk operations.
+Phoenix Key is provided "as is" without warranty. Users are responsible for data safety and proper usage. Always back up important data before performing disk operations.

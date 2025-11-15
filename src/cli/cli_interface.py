@@ -31,6 +31,7 @@ from src.core.disk_manager import DiskManager
 from src.core.system_monitor import SystemMonitor
 from src.core.safety_validator import SafetyValidator, SafetyLevel, ValidationResult
 from src.plugins.plugin_manager import PluginManager
+from src.utils.doc_builder import PhoenixDocsBuilder
 
 
 @click.group()
@@ -494,3 +495,39 @@ def system_info(ctx):
 
 if __name__ == '__main__':
     cli()
+@cli.command(name="build-phoenix-docs")
+@click.option(
+    "--source",
+    default="docs/phoenix_docs",
+    show_default=True,
+    help="Path to the PhoenixDocs Markdown directory",
+)
+@click.option(
+    "--output",
+    default="dist/phoenix_docs_html",
+    show_default=True,
+    help="Destination directory for generated HTML",
+)
+@click.option(
+    "--version",
+    default="1.0.0",
+    show_default=True,
+    help="Version stamp to embed in generated documentation",
+)
+def build_phoenix_docs(source: str, output: str, version: str):
+    """Render PhoenixDocs Markdown into offline HTML."""
+
+    click.echo(f"{Fore.BLUE}🛠  Building PhoenixDocs offline library...{Style.RESET_ALL}")
+    builder = PhoenixDocsBuilder(source, output, build_version=version)
+
+    try:
+        manifest = builder.build()
+    except FileNotFoundError as exc:
+        click.echo(f"{Fore.RED}❌ {exc}{Style.RESET_ALL}")
+        sys.exit(1)
+
+    doc_count = len(manifest.get("documents", []))
+    click.echo(
+        f"{Fore.GREEN}✅ Generated {doc_count} document(s) into {output}{Style.RESET_ALL}"
+    )
+    click.echo(f"{Fore.CYAN}📄 Manifest: phoenix_docs_manifest.json{Style.RESET_ALL}")

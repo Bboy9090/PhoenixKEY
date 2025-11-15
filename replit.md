@@ -2,7 +2,7 @@
 
 ## Overview
 
-BootForge is a professional-grade tool for creating bootable USB drives for macOS, Windows, and Linux operating systems. The application features a modular plugin architecture with both CLI and GUI interfaces, designed for cross-platform compatibility. It provides advanced functionality including driver injection, system monitoring, iOS jailbreak integration (checkra1n), and comprehensive USB drive diagnostics. The tool is built with Python and PyQt6, targeting power users and system administrators who need reliable OS deployment capabilities.
+BootForge is a professional-grade tool for creating bootable USB drives for macOS, Windows, and Linux operating systems. The application features a modular plugin architecture with both CLI and GUI interfaces, designed for cross-platform compatibility. It provides advanced functionality including driver injection, system monitoring, Apple platform recovery automation, and comprehensive USB drive diagnostics. The tool is built with Python and PyQt6, targeting power users and system administrators who need reliable OS deployment capabilities.
 
 ## Recent Changes
 
@@ -100,7 +100,7 @@ Preferred communication style: Simple, everyday language.
 - **Specialized Plugins**: 
   - Driver injection for Windows/macOS systems
   - USB diagnostics and health checking
-  - Checkra1n integration for iOS workflows
+  - Apple Silicon recovery helpers and BootCamp automation
 - **Configuration Integration**: Plugins integrate with central configuration system
 
 ### Data Management
@@ -128,8 +128,7 @@ Preferred communication style: Simple, everyday language.
   - Linux: badblocks, e2fsprogs, dosfstools, ntfs-3g
   - macOS: diskutil (system built-in)
   - Windows: format (system built-in)
-- **Mobile Device Support**: libimobiledevice for iOS device interaction
-- **Specialized Tools**: checkra1n for iOS jailbreak workflows
+- **Apple Platform Support**: diskutil, asr, Apple Silicon firmware utilities, and check8-based DFU guidance for Mac recovery flows
 
 ### Development and Distribution
 - **pyinstaller**: Binary packaging and distribution

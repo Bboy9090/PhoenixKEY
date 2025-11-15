@@ -4,6 +4,12 @@ BootForge is a comprehensive, professional-grade tool for creating bootable USB 
 
 > **Looking for the Phoenix Key master plan?** Read the [BootForge Phoenix Key — Legendary Forge Blueprint](docs/phoenix_key_legendary_blueprint.md) for the full multi-platform recovery vision, product pillars, and implementation roadmap.
 
+### Phoenix Key Brand Assets
+
+* Explore the [Phoenix Key Brand Guide](docs/phoenix_brand/brand_guide.md) for color palettes, typography, and usage rules.
+* Source-ready SVGs live under [`assets/logo/`](assets/logo/) and include badge, wordmark, and monochrome variants tuned for UI, packaging, and engraving workflows.
+
+
 ## Features
 
 ### Core Functionality

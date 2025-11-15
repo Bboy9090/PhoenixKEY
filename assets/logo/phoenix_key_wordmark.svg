@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" role="img" aria-labelledby="title desc">
+  <title id="title">Phoenix Key Wordmark</title>
+  <desc id="desc">Horizontal logo with phoenix and key emblem paired with Phoenix Key typography.</desc>
+  <defs>
+    <linearGradient id="ember" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ff3d1f" />
+      <stop offset="45%" stop-color="#ff6a2b" />
+      <stop offset="100%" stop-color="#ffbf4b" />
+    </linearGradient>
+    <linearGradient id="aurora" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#00f6ff" />
+      <stop offset="100%" stop-color="#0078ff" />
+    </linearGradient>
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="100%" height="100%" rx="24" fill="#05090f" />
+  <g transform="translate(120 48)">
+    <path d="M120 0c-36 20-66 60-66 106 0 68 60 118 66 122 6-4 66-54 66-122C186 60 156 20 120 0z" fill="url(#ember)" />
+    <path d="M120 18c18 18 30 38 30 60 0 30-18 56-30 70-12-14-30-40-30-70 0-22 12-42 30-60z" fill="#05090f" />
+    <path d="M120 56c8 10 12 20 12 30 0 14-8 26-12 30-4-4-12-16-12-30 0-10 4-20 12-30z" fill="url(#aurora)" filter="url(#softGlow)" opacity="0.85" />
+    <path d="M120 140c28-24 66-36 108-32-36 18-64 50-76 94h-32c-12-44-40-76-76-94 42-4 80 8 108 32z" fill="url(#aurora)" opacity="0.85" />
+    <g transform="translate(120 182)">
+      <path d="M0-20c-24 0-42 18-42 42 0 20 12 34 30 38v42h24v-42c18-4 30-18 30-38 0-24-18-42-42-42z" fill="none" stroke="#00f6ff" stroke-width="8" />
+      <circle cy="0" r="16" fill="#00f6ff" />
+      <circle cy="0" r="8" fill="#05090f" />
+    </g>
+    <path d="M96 58c-24 10-50 8-74-8 10 40 40 64 80 70" stroke="#ffdcb0" stroke-width="6" stroke-linecap="round" opacity="0.55" />
+    <path d="M144 58c24 10 50 8 74-8-10 40-40 64-80 70" stroke="#ffdcb0" stroke-width="6" stroke-linecap="round" opacity="0.55" />
+  </g>
+  <g transform="translate(360 92)" fill="#f7f9ff" font-family="'Eurostile', 'Bank Gothic', 'Orbitron', sans-serif" font-weight="600" letter-spacing="6">
+    <text x="0" y="86" font-size="88" fill="url(#ember)">PHOENIX</text>
+    <text x="0" y="174" font-size="88" fill="url(#aurora)">KEY</text>
+    <text x="2" y="216" font-size="28" fill="#ff6a2b" letter-spacing="12">REIGNITE · REBUILD · REBOOT</text>
+  </g>
+</svg>
